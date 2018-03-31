@@ -1,0 +1,16 @@
+[package]
+name = "stund"
+version = "0.1.0"
+authors = ["Peter Williams <peter@newton.cx>"]
+
+[dependencies]
+bincode = "1.0"
+chan = "0.1"
+chan-signal = "0.3"
+daemonize = "0.2"
+failure = "0.1"
+serde = "1.0"
+serde_derive = "1.0"
+ssh = "0.1"
+structopt = "0.2"
+unix_socket = "0.5"
