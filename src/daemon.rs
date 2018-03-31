@@ -7,13 +7,15 @@ use bincode;
 use chan;
 use chan_signal::{self, Signal};
 use daemonize;
-use failure::Error;
+use failure::{Error, ResultExt};
 use pty::{self, CommandPtyExt};
 use std::collections::HashMap;
 use std::env;
 use std::fmt;
 use std::fs;
 use std::io::{self, prelude::*};
+use std::mem;
+use std::os::unix::io::{AsRawFd, FromRawFd};
 use std::path::PathBuf;
 use std::process;
 use std::thread;
@@ -83,6 +85,11 @@ impl DaemonConnection {
     pub fn recv_message(&mut self) -> Result<ServerMessage, Error> {
         Ok(bincode::deserialize_from(&self.sock)?)
     }
+
+    // Hack hack hack
+    pub fn clone_socket(&self) -> UnixStream {
+        unsafe { UnixStream::from_raw_fd(self.sock.as_raw_fd()) }
+    }
 }
 
 impl Drop for DaemonConnection {
@@ -95,7 +102,15 @@ impl Drop for DaemonConnection {
 pub struct Server {
     #[allow(unused)] opts: StundDaemonOptions,
     log: Box<Write>,
-    children: HashMap<String, process::Child>,
+    children: HashMap<String, Tunnel>,
+}
+
+struct Tunnel {
+    ssh: process::Child,
+
+    /// Needed to maintain the SSH daemon's PTY! Otherwise it SIGHUPs and dies
+    /// if it tries to do any output.
+    #[allow(unused)] ptymaster: fs::File,
 }
 
 macro_rules! server_log {
@@ -199,12 +214,12 @@ impl Server {
         let mut children = HashMap::new();
         ::std::mem::swap(&mut inst.children, &mut children); // borrowck fun
 
-        for (host, mut child) in children.drain() {
-            if let Err(e) = child.kill() {
+        for (host, mut tunnel) in children.drain() {
+            if let Err(e) = tunnel.ssh.kill() {
                 server_log!(inst, "error killing process for {}: {}", host, e);
             }
 
-            if let Err(e) = child.wait() {
+            if let Err(e) = tunnel.ssh.wait() {
                 server_log!(inst, "error wait()ing for process for {}: {}", host, e);
             }
         }
@@ -242,8 +257,8 @@ impl Server {
     /// Probably a better way to do this stuff but can't figure out something
     /// that works with the lifetimes.
     fn find_exited_child(&mut self) -> Result<(String, process::ExitStatus), Error> {
-        for (host, child) in self.children.iter_mut() {
-            if let Some(status) = child.try_wait()? {
+        for (host, tunnel) in self.children.iter_mut() {
+            if let Some(status) = tunnel.ssh.try_wait()? {
                 return Ok((host.to_owned(), status));
             }
         }
@@ -261,10 +276,25 @@ impl Server {
 
     fn handle_client(&mut self, conn: UnixStream) -> Result<Outcome, Error> {
         loop {
-            match bincode::deserialize_from(&conn)? {
-                ClientMessage::Open(params) => { self.handle_open(&conn, params)?; },
+            let msg = bincode::deserialize_from(&conn)?;
+
+            let r = match msg {
+                ClientMessage::Open(params) => { self.handle_open(&conn, params) },
                 ClientMessage::Exit => { return Ok(Outcome::Exit); } // XXX not waiting for goodbye
                 ClientMessage::Goodbye => { break; },
+                other => {
+                    server_log!(self, "unexpected toplevel message from client: {:?}", other);
+                    break;
+                }
+            };
+
+            if let Err(e) = r {
+                if let Err(e2) = bincode::serialize_into(conn, &server_error!("{}", e)) {
+                    server_log!(self, "error doing work for client to be reported next");
+                    server_log!(self, "additional error encountered reporting error to client: {}", e2);
+                }
+
+                return Err(e.context("error reported to client").into());
             }
         }
 
@@ -272,35 +302,135 @@ impl Server {
     }
 
     fn handle_open(&mut self, conn: &UnixStream, params: OpenParameters) -> Result<(), Error> {
-        // Start with the PTY
+        // Start with the PTY.
 
-        let mut ptymaster = pty::create()?; // XX report errors to client
-        //let ptyslave = ptymaster.open_pty_slave()?;
+        let mut ptymaster = pty::create().context("failed to create PTY")?;
 
-        let r = process::Command::new("ssh")
+        let child = process::Command::new("ssh")
             .arg("-N")
             .arg(&params.host)
-            .slave_to_pty(&ptymaster)?
-            .spawn();
-
-        let child = match r {
-            Ok(c) => c,
-            Err(e) => {
-                bincode::serialize_into(conn, &server_error!("failed to launch SSH: {}", e))?;
-                return Ok(());
-            }
-        };
+            .env_remove("DISPLAY")
+            .slave_to_pty(&ptymaster).context("failed to set up PTY slave")?
+            .spawn().context("failed to launch SSH command")?;
 
         // To reap children properly, we need to log them here, before we know
         // if we've actually set up the SSH session fully.
-        self.children.insert(params.host, child);
+        self.children.insert(params.host, Tunnel {
+            ssh: child,
+            ptymaster: ptymaster.try_clone().context("failed to duplicate PTY master")?,
+        });
 
-        writeln!(ptymaster, "hello")?;
+        // Next, forward any I/O needed to execute the login. It feels pretty
+        // dumb to use threads for this but meh. The initial OK message tells
+        // the client that it can start forwarding I/O.
 
-        let mut buf = [0u8; 512];
+        bincode::serialize_into(conn, &ServerMessage::Ok)?;
 
-        let n = ptymaster.read(&mut buf)?;
-        println!("QQQ {:?}", &buf[..n]);
+        // Thread 1 reads from SSH.
+
+        let mut master_clone = ptymaster.try_clone().context("failed to duplicate PTY master")?;
+        let (sdata1, rdata1) = chan::async();
+        let (serror1, rerror1) = chan::async();
+        let (squit1, rquit1) = chan::sync::<()>(0);
+
+        thread::spawn(move || {
+            let mut buf = [0u8; 512];
+
+            loop {
+                let n = match master_clone.read(&mut buf) {
+                    Ok(n) => n,
+                    Err(e) => {
+                        serror1.send(e);
+                        break;
+                    },
+                };
+
+                sdata1.send(buf[..n].to_owned());
+                
+                chan_select! {
+                    default => {},
+                    rquit1.recv() => { break; },
+                }
+            }
+        });
+
+        // Thread 2 reads from the client
+
+        let conn_clone = unsafe { UnixStream::from_raw_fd(conn.as_raw_fd()) };
+        let (sdata2, rdata2) = chan::async();
+        let (serror2, rerror2) = chan::async();
+        let (squit2, rquit2) = chan::sync::<()>(0);
+
+        thread::spawn(move || {
+            loop {
+                let msg = match bincode::deserialize_from(&conn_clone) {
+                    Ok(m) => m,
+                    Err(e) => {
+                        serror2.send(e);
+                        break;
+                    },
+                };
+
+                sdata2.send(msg);
+
+                chan_select! {
+                    default => {},
+                    rquit2.recv() => { break; },
+                }
+            }
+
+            mem::forget(conn_clone);
+        });
+
+        // And now we orchestrate it all.
+
+        loop {
+            chan_select! {
+                rdata1.recv() -> o => {
+                    if let Some(ssh_data) = o {
+                        //println!("rdata1: {:?}", ssh_data);
+                        bincode::serialize_into(conn, &ServerMessage::SshData(ssh_data))?;
+                    }
+                },
+
+                rdata2.recv() -> o => {
+                    if let Some(msg) = o {
+                        //println!("rdata2: {:?}", msg);
+                        match msg {
+                            ClientMessage::EndOfUserData => {
+                                break;
+                            },
+
+                            ClientMessage::UserData(ref data) => {
+                                ptymaster.write_all(data)?;
+                            },
+
+                            other => {
+                                server_log!(self, "unexpected client message during SSH setup: {:?}", other);
+                                break;
+                            },
+                        }
+                    }
+                },
+
+                rerror1.recv() -> o => {
+                    if let Some(err) = o {
+                        server_log!(self, "error reading from SSH: {}", err);
+                        break;
+                    }
+                },
+
+                rerror2.recv() -> o => {
+                    if let Some(err) = o {
+                        server_log!(self, "error reading from client: {}", err);
+                        break;
+                    }
+                },
+            }
+        }
+
+        mem::drop(squit1); // cause the rquit1 channel to sync
+        mem::drop(squit2);
 
         bincode::serialize_into(conn, &ServerMessage::Ok)?;
         Ok(())
@@ -325,6 +455,12 @@ pub enum ClientMessage {
     /// Open an SSH tunnel
     Open(OpenParameters),
 
+    /// User input to be sent to SSH
+    UserData(Vec<u8>),
+
+    /// User input has concluded.
+    EndOfUserData,
+
     /// Tell the daemon to exit
     Exit,
 
@@ -335,6 +471,7 @@ pub enum ClientMessage {
 #[derive(Debug, Deserialize, PartialEq, Serialize)]
 pub enum ServerMessage {
     Ok,
+    SshData(Vec<u8>),
     Error(String),
 }
 
