@@ -4,7 +4,7 @@
 //! Interfacing with the daemon.
 
 use bincode;
-use chan::{self, Sender};
+use chan;
 use chan_signal::{self, Signal};
 use daemonize;
 use failure::Error;
@@ -62,7 +62,7 @@ impl DaemonConnection {
                         UnixStream::connect(&p)?
                     },
 
-                    other => {
+                    _ => {
                         return Err(e.into());
                     },
                 }
@@ -88,7 +88,7 @@ impl Drop for DaemonConnection {
 
 
 pub struct Server {
-    opts: StundDaemonOptions,
+    #[allow(unused)] opts: StundDaemonOptions,
     log: Box<Write>,
     children: HashMap<String, process::Child>,
 }
@@ -150,53 +150,37 @@ impl Server {
         server_log!(inst, "stund daemon: starting main loop");
 
         loop {
+            let mut event = Event::Nothing;
+
             chan_select! {
                 signal.recv() -> signal => {
                     if let Some(signal) = signal {
-                        match signal {
-                            Signal::CHLD => {
-                                inst.handle_sigchld();
-                            },
-
-                            s => {
-                                server_log!(inst, "exiting on fatal signal {:?}", s);
-                                break;
-                            },
-                        }
+                        event = Event::Signal(signal);
                     }
                 },
 
                 rconn.recv() -> conn => {
                     if let Some(r) = conn {
-                        match r {
-                            Ok(c) => {
-                                match inst.handle_client(c) {
-                                    Ok(outcome) => {
-                                        match outcome {
-                                            Outcome::Exit => {
-                                                server_log!(inst, "exiting by command");
-                                                break;
-                                            },
-
-                                            Outcome::Continue => {},
-                                        }
-                                    },
-
-                                    Err(e) => {
-                                        server_log!(inst, "error during client session");
-                                        for cause in e.causes() {
-                                            server_log!(inst, "  caused by: {}", cause);
-                                        }
-                                    },
-                                }
-                            },
-
-                            Err(e) => {
-                                server_log!(inst, "error accepting new connection: {}", e);
-                            },
-                        }
+                        event = Event::Connection(r);
                     }
-                },
+                }
+            }
+
+            let desc = format!("{:?}", event);
+
+            let outcome = match inst.handle_event(event) {
+                Ok(oc) => oc,
+                Err(e) => {
+                    server_log!(inst, "error while handling event {}", desc);
+                    for cause in e.causes() {
+                        server_log!(inst, "  caused by: {}", cause);
+                    }
+                    Outcome::Continue
+                }
+            };
+
+            if let Outcome::Exit = outcome {
+                break;
             }
         }
 
@@ -223,6 +207,28 @@ impl Server {
         let _r = writeln!(self.log, "{}", args);
     }
 
+    fn handle_event(&mut self, event: Event) -> Result<Outcome, Error> {
+        match event {
+            Event::Nothing => {
+                Ok(Outcome::Continue)
+            },
+
+            Event::Signal(Signal::CHLD) => {
+                self.handle_sigchld()?;
+                Ok(Outcome::Continue)
+            },
+
+            Event::Signal(signal) => {
+                server_log!(self, "exiting on fatal signal {:?}", signal);
+                Ok(Outcome::Exit)
+            },
+
+            Event::Connection(rconn) => {
+                self.handle_client(rconn?)
+            },
+        }
+    }
+
     /// Probably a better way to do this stuff but can't figure out something
     /// that works with the lifetimes.
     fn find_exited_child(&mut self) -> Result<(String, process::ExitStatus), Error> {
@@ -244,8 +250,6 @@ impl Server {
     }
 
     fn handle_client(&mut self, conn: UnixStream) -> Result<Outcome, Error> {
-        server_log!(self, "new connection");
-
         loop {
             match bincode::deserialize_from(&conn)? {
                 ClientMessage::Open(params) => { self.handle_open(&conn, params)?; },
@@ -257,7 +261,7 @@ impl Server {
         Ok(Outcome::Continue)
     }
 
-    fn handle_open(&mut self, conn: &UnixStream, params: OpenParameters) -> Result<(), Error> {
+    fn handle_open(&mut self, _conn: &UnixStream, params: OpenParameters) -> Result<(), Error> {
         let child = process::Command::new("ssh")
             .arg("-N")
             .arg(&params.host)
@@ -268,6 +272,14 @@ impl Server {
     }
 }
 
+#[derive(Debug)]
+enum Event {
+    Signal(chan_signal::Signal),
+    Connection(Result<UnixStream, io::Error>),
+    Nothing,
+}
+
+#[derive(Debug)]
 enum Outcome {
     Continue,
     Exit,
