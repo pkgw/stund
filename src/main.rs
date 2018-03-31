@@ -8,9 +8,9 @@ extern crate bincode;
 extern crate chan_signal;
 extern crate daemonize;
 #[macro_use] extern crate failure;
+extern crate libc;
 extern crate serde;
 #[macro_use] extern crate serde_derive;
-extern crate ssh;
 #[macro_use] extern crate structopt;
 extern crate unix_socket;
 
@@ -19,7 +19,7 @@ use std::process;
 use structopt::StructOpt;
 
 mod daemon;
-
+mod pty;
 
 #[derive(Debug, StructOpt)]
 pub struct StundDaemonOptions {

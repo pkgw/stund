@@ -8,6 +8,7 @@ use chan;
 use chan_signal::{self, Signal};
 use daemonize;
 use failure::Error;
+use pty::{self, CommandPtyExt};
 use std::collections::HashMap;
 use std::env;
 use std::fmt;
@@ -271,11 +272,15 @@ impl Server {
     }
 
     fn handle_open(&mut self, conn: &UnixStream, params: OpenParameters) -> Result<(), Error> {
+        // Start with the PTY
+
+        let mut ptymaster = pty::create()?; // XX report errors to client
+        //let ptyslave = ptymaster.open_pty_slave()?;
+
         let r = process::Command::new("ssh")
             .arg("-N")
             .arg(&params.host)
-            .stdout(process::Stdio::piped())
-            .stderr(process::Stdio::piped())
+            .slave_to_pty(&ptymaster)?
             .spawn();
 
         let child = match r {
@@ -286,7 +291,17 @@ impl Server {
             }
         };
 
+        // To reap children properly, we need to log them here, before we know
+        // if we've actually set up the SSH session fully.
         self.children.insert(params.host, child);
+
+        writeln!(ptymaster, "hello")?;
+
+        let mut buf = [0u8; 512];
+
+        let n = ptymaster.read(&mut buf)?;
+        println!("QQQ {:?}", &buf[..n]);
+
         bincode::serialize_into(conn, &ServerMessage::Ok)?;
         Ok(())
     }
