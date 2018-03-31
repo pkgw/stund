@@ -53,12 +53,25 @@ impl StundExitOptions {
 pub struct StundOpenOptions {
     #[structopt(help = "The host for which the tunnel should be opened.")]
     host: String,
+
+    // TODO? keepalive option/config setting for tunnels that can/should be
+    // restarted by the daemon if the SSH process dies; i.e. ones that do not
+    // need interactive authentication to establish.
 }
 
 impl StundOpenOptions {
     fn cli(self) -> Result<i32, Error> {
         let mut conn = daemon::DaemonConnection::new()?;
         conn.send_message(&daemon::ClientMessage::Open(self.into()))?;
+
+        match conn.recv_message()? {
+            daemon::ServerMessage::Ok => {},
+
+            daemon::ServerMessage::Error(e) => {
+                return Err(format_err!("{}", e).context("error opening tunnel").into());
+            },
+        }
+
         Ok(0)
     }
 }

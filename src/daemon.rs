@@ -78,6 +78,10 @@ impl DaemonConnection {
         bincode::serialize_into(&self.sock, msg)?;
         Ok(())
     }
+
+    pub fn recv_message(&mut self) -> Result<ServerMessage, Error> {
+        Ok(bincode::deserialize_from(&self.sock)?)
+    }
 }
 
 impl Drop for DaemonConnection {
@@ -96,6 +100,11 @@ pub struct Server {
 macro_rules! server_log {
     ($server:expr, $fmt:expr) => { $server.log_items(format_args!($fmt)) };
     ($server:expr, $fmt:expr, $($args:tt)*) => { $server.log_items(format_args!($fmt, $($args)*)) };
+}
+
+macro_rules! server_error {
+    ($fmt:expr) => { ServerMessage::Error(format!($fmt)) };
+    ($fmt:expr, $($args:tt)*) => { ServerMessage::Error(format!($fmt, $($args)*)) };
 }
 
 impl Server {
@@ -261,13 +270,24 @@ impl Server {
         Ok(Outcome::Continue)
     }
 
-    fn handle_open(&mut self, _conn: &UnixStream, params: OpenParameters) -> Result<(), Error> {
-        let child = process::Command::new("ssh")
+    fn handle_open(&mut self, conn: &UnixStream, params: OpenParameters) -> Result<(), Error> {
+        let r = process::Command::new("ssh")
             .arg("-N")
             .arg(&params.host)
-            .spawn()?;
+            .stdout(process::Stdio::piped())
+            .stderr(process::Stdio::piped())
+            .spawn();
+
+        let child = match r {
+            Ok(c) => c,
+            Err(e) => {
+                bincode::serialize_into(conn, &server_error!("failed to launch SSH: {}", e))?;
+                return Ok(());
+            }
+        };
 
         self.children.insert(params.host, child);
+        bincode::serialize_into(conn, &ServerMessage::Ok)?;
         Ok(())
     }
 }
@@ -285,7 +305,6 @@ enum Outcome {
     Exit,
 }
 
-
 #[derive(Debug, Deserialize, PartialEq, Serialize)]
 pub enum ClientMessage {
     /// Open an SSH tunnel
@@ -297,6 +316,13 @@ pub enum ClientMessage {
     /// End the session.
     Goodbye,
 }
+
+#[derive(Debug, Deserialize, PartialEq, Serialize)]
+pub enum ServerMessage {
+    Ok,
+    Error(String),
+}
+
 
 #[derive(Debug, Deserialize, PartialEq, Serialize)]
 pub struct OpenParameters {
