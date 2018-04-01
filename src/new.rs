@@ -5,7 +5,7 @@
 
 use atty;
 use failure::Error;
-use futures::future::{self, Either};
+use futures::future::Either;
 use futures::sink::Send;
 use futures::stream::StreamFuture;
 use futures::sync::mpsc::Receiver;
@@ -16,11 +16,8 @@ use std::io;
 use std::mem;
 use std::os::unix::io::AsRawFd;
 use std::path::PathBuf;
-use std::process;
-use std::thread;
-use std::time;
 use tokio::prelude::*;
-use tokio_core::reactor::{Core, Handle};
+use tokio_core::reactor::Core;
 use tokio_io::codec::length_delimited::{FramedRead, FramedWrite};
 use tokio_io::io::{ReadHalf, WriteHalf};
 use tokio_serde_json::{ReadJson, WriteJson};
@@ -29,7 +26,6 @@ use tokio_uds::UnixStream;
 
 use super::daemon::ClientMessage;
 use super::daemon::ServerMessage;
-use super::daemon::OpenParameters;
 use super::StundOpenOptions;
 
 fn get_socket_path() -> Result<PathBuf, Error> {
@@ -43,6 +39,7 @@ type Ser = WriteJson<FramedWrite<WriteHalf<UnixStream>>, ClientMessage>;
 type De = ReadJson<FramedRead<ReadHalf<UnixStream>>, ServerMessage>;
 
 #[derive(StateMachineFuture)]
+#[allow(unused)] // get lots of these spuriously; custom derive stuff?
 enum OpenWorkflow {
     #[state_machine_future(start, transitions(FirstAck))]
     Issue {
@@ -143,7 +140,7 @@ pub fn new_open(opts: StundOpenOptions) -> Result<(), Error> {
     let fut = ser.send(ClientMessage::Open((&opts).into()));
     let result = core.run(OpenWorkflow::start(opts, de, fut));
     toggle_terminal_echo(true);
-    let (ser, de) = result?;
+    let (ser, _de) = result?;
     println!("[Success]");
 
     core.run(ser.send(ClientMessage::Goodbye))?;
@@ -189,7 +186,7 @@ impl PollOpenWorkflow for OpenWorkflow {
             },
 
             None => {
-                return transition!(state.take());
+                transition!(state.take());
             },
         }
 
@@ -394,10 +391,10 @@ impl PollOpenWorkflow for OpenWorkflow {
                         got_ok = true;
                     }
 
-                    Some(other) => {
-                        println!("");
-                        return Err(format_err!("unexpected message from the daemon: {:?}", other));
-                    },
+                    //Some(other) => {
+                    //    println!("");
+                    //    return Err(format_err!("unexpected message from the daemon: {:?}", other));
+                    //},
 
                     None => {},
                 }

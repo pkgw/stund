@@ -83,16 +83,6 @@ impl DaemonConnection {
         serde_json::to_writer(&self.sock, msg)?;
         Ok(())
     }
-
-    pub fn recv_message(&mut self) -> Result<ServerMessage, Error> {
-        //Ok(bincode::deserialize_from(&self.sock)?)
-        Ok(serde_json::from_reader(&self.sock)?)
-    }
-
-    // Hack hack hack
-    pub fn clone_socket(&self) -> UnixStream {
-        unsafe { UnixStream::from_raw_fd(self.sock.as_raw_fd()) }
-    }
 }
 
 impl Drop for DaemonConnection {
