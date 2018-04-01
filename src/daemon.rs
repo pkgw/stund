@@ -1,145 +1,61 @@
 // Copyright 2018 Peter Williams <peter@newton.cx>
 // Licensed under the MIT License.
 
-//! Interfacing with the daemon.
+//! The daemon itself.
 
-//use bincode;
-use chan;
-use chan_signal::{self, Signal};
 use daemonize;
 use failure::{Error, ResultExt};
-use pty::{self, CommandPtyExt};
-use serde_json;
+use futures::future::Either;
+use futures::sink::Send;
+use futures::stream::StreamFuture;
+use futures::sync::mpsc::Receiver;
+use libc;
+use pseudotty::{self, CommandPtyExt};
+use state_machine_future::RentToOwn;
 use std::collections::HashMap;
 use std::env;
 use std::fmt;
 use std::fs;
-use std::io::{self, prelude::*};
+use std::io;
+use std::marker::Send as StdSend;
 use std::mem;
-use std::os::unix::io::{AsRawFd, FromRawFd};
+use std::os::unix::io::AsRawFd;
+use std::os::unix::net::{SocketAddr, UnixStream as StdUnixStream};
 use std::path::PathBuf;
-use std::process;
-use std::thread;
-use std::time;
-use super::{StundDaemonOptions, StundOpenOptions};
-use unix_socket::{UnixListener, UnixStream};
+use std::sync::{Arc, Mutex};
+use stund::*;
+use stund::protocol::*;
+use tokio::prelude::*;
+use tokio_core::reactor::Core;
+use tokio_io::codec::length_delimited::{FramedRead, FramedWrite};
+use tokio_io::io::{ReadHalf, WriteHalf};
+use tokio_serde_json::{ReadJson, WriteJson};
+use tokio_stdin;
+use tokio_uds::{UnixListener, UnixStream};
+
+use super::*;
+
+type Ser = WriteJson<FramedWrite<WriteHalf<UnixStream>>, ServerMessage>;
+type De = ReadJson<FramedRead<ReadHalf<UnixStream>>, ClientMessage>;
 
 
-fn get_socket_path() -> Result<PathBuf, Error> {
-    let mut p = env::home_dir().ok_or(format_err!("unable to determine your home directory"))?;
-    p.push(".ssh");
-    p.push("stund.sock");
-    Ok(p)
-}
-
-fn get_log_path() -> Result<PathBuf, Error> {
-    let mut p = env::home_dir().ok_or(format_err!("unable to determine your home directory"))?;
-    p.push(".ssh");
-    p.push("stund.log");
-    Ok(p)
-}
-
-pub struct DaemonConnection {
-    sock: UnixStream
-}
-
-
-impl DaemonConnection {
-    /// Connect to the daemon, starting it if it doesn't seem to be running.
-    pub fn new() -> Result<Self, Error> {
-        let p = get_socket_path()?;
-
-        let sock = match UnixStream::connect(&p) {
-            Ok(sock) => sock,
-            Err(e) => {
-                match e.kind() {
-                    io::ErrorKind::NotFound => {
-                        // Looks like the daemon isn't running. Start it and try again.
-                        println!("stund: launching background daemon");
-                        let argv0 = env::args().next().unwrap_or_else(|| "stund".to_owned());
-
-                        if !process::Command::new(argv0).arg("daemon").status()?.success() {
-                            return Err(format_err!("failed to launch the daemon"));
-                        }
-
-                        thread::sleep(time::Duration::from_millis(500));
-                        UnixStream::connect(&p)?
-                    },
-
-                    _ => {
-                        return Err(e.into());
-                    },
-                }
-            },
-        };
-
-        Ok(DaemonConnection {
-            sock: sock,
-        })
-    }
-
-    pub fn send_message(&mut self, msg: &ClientMessage) -> Result<(), Error> {
-        //bincode::serialize_into(&self.sock, msg)?;
-        serde_json::to_writer(&self.sock, msg)?;
-        Ok(())
-    }
-}
-
-impl Drop for DaemonConnection {
-    fn drop(&mut self) {
-        //let _r = bincode::serialize_into(&self.sock, &ClientMessage::Goodbye);
-        let _r = serde_json::to_writer(&self.sock, &ClientMessage::Goodbye);
-    }
-}
-
-
-pub struct Server {
-    #[allow(unused)] opts: StundDaemonOptions,
-    log: Box<Write>,
+pub struct State {
+    sock_path: PathBuf,
+    _opts: StundDaemonOptions,
+    log: Box<Write + StdSend>,
     children: HashMap<String, Tunnel>,
 }
 
-struct Tunnel {
-    ssh: process::Child,
-
-    /// Needed to maintain the SSH daemon's PTY! Otherwise it SIGHUPs and dies
-    /// if it tries to do any output.
-    #[allow(unused)] ptymaster: fs::File,
+macro_rules! log {
+    ($state:expr, $fmt:expr) => { $state.log_items(format_args!($fmt)) };
+    ($state:expr, $fmt:expr, $($args:tt)*) => { $state.log_items(format_args!($fmt, $($args)*)) };
 }
 
-macro_rules! server_log {
-    ($server:expr, $fmt:expr) => { $server.log_items(format_args!($fmt)) };
-    ($server:expr, $fmt:expr, $($args:tt)*) => { $server.log_items(format_args!($fmt, $($args)*)) };
-}
-
-macro_rules! server_error {
-    ($fmt:expr) => { ServerMessage::Error(format!($fmt)) };
-    ($fmt:expr, $($args:tt)*) => { ServerMessage::Error(format!($fmt, $($args)*)) };
-}
-
-fn to_writer_framed(conn: &mut UnixStream, item: &ServerMessage) -> Result<(), Error> {
-    use byteorder::{BigEndian, WriteBytesExt};
-    let vec = serde_json::to_vec(item)?;
-    conn.write_u32::<BigEndian>(vec.len() as u32)?;
-    conn.write_all(&vec)?;
-    Ok(())
-}
-
-fn from_reader_framed(conn: &mut UnixStream) -> Result<ClientMessage, Error> {
-    use byteorder::{BigEndian, ReadBytesExt};
-    let n = conn.read_u32::<BigEndian>()?;
-    let mut vec = Vec::with_capacity(n as usize);
-    unsafe { vec.set_len(n as usize); }
-    conn.read_exact(&mut vec)?;
-    let val = serde_json::from_slice(&vec)?;
-    Ok(val)
-}
-    
-impl Server {
-    pub fn launch(opts: StundDaemonOptions) -> Result<i32, Error> {
+impl State {
+    pub fn new(opts: StundDaemonOptions) -> Result<Self, Error> {
         let p = get_socket_path()?;
 
-        if UnixStream::connect(&p).is_ok() {
+        if StdUnixStream::connect(&p).is_ok() {
             return Err(format_err!("refusing to start: another daemon is already running"));
         }
 
@@ -155,357 +71,481 @@ impl Server {
             },
         }
 
-        let sock = UnixListener::bind(&p)?;
-        let (sconn, rconn) = chan::async();
+        unsafe { libc::umask(0o177); }
 
-        let log: Box<Write> = if opts.foreground {
+        let log: Box<Write + StdSend> = if opts.foreground {
             println!("stund daemon: staying in foreground");
             Box::new(io::stdout())
         } else {
-            let log = fs::File::create(get_log_path()?)?;
+            let mut log_path = p.clone();
+            log_path.set_extension("log");
+
+            let log = fs::File::create(&log_path)?;
             daemonize::Daemonize::new().start()?;
             Box::new(log)
         };
 
-        let signal = chan_signal::notify(&[
-            Signal::ABRT, Signal::BUS, Signal::CHLD, Signal::HUP, Signal::ILL, Signal::INT,
-            Signal::KILL, Signal::PIPE, Signal::SEGV, Signal::TERM, Signal::QUIT,
-        ]);
-
-        let mut inst = Server {
-            opts: opts,
+        Ok(State {
+            sock_path: p,
+            _opts: opts,
             log: log,
             children: HashMap::new(),
-        };
-
-        thread::spawn(move || {
-            for item in sock.incoming() {
-                sconn.send(item);
-            }
-        });
-
-        server_log!(inst, "stund daemon: starting main loop");
-
-        loop {
-            let mut event = Event::Nothing;
-
-            chan_select! {
-                signal.recv() -> signal => {
-                    if let Some(signal) = signal {
-                        event = Event::Signal(signal);
-                    }
-                },
-
-                rconn.recv() -> conn => {
-                    if let Some(r) = conn {
-                        event = Event::Connection(r);
-                    }
-                }
-            }
-
-            let desc = format!("{:?}", event);
-
-            let outcome = match inst.handle_event(event) {
-                Ok(oc) => oc,
-                Err(e) => {
-                    server_log!(inst, "error while handling event {}", desc);
-                    for cause in e.causes() {
-                        server_log!(inst, "  caused by: {}", cause);
-                    }
-                    Outcome::Continue
-                }
-            };
-
-            if let Outcome::Exit = outcome {
-                break;
-            }
-        }
-
-        server_log!(inst, "stund daemon: wrapping up");
-
-        let mut children = HashMap::new();
-        ::std::mem::swap(&mut inst.children, &mut children); // borrowck fun
-
-        for (host, mut tunnel) in children.drain() {
-            if let Err(e) = tunnel.ssh.kill() {
-                server_log!(inst, "error killing process for {}: {}", host, e);
-            }
-
-            if let Err(e) = tunnel.ssh.wait() {
-                server_log!(inst, "error wait()ing for process for {}: {}", host, e);
-            }
-        }
-
-        fs::remove_file(&p)?;
-        Ok(0)
+        })
     }
+
 
     fn log_items(&mut self, args: fmt::Arguments) {
         let _r = writeln!(self.log, "{}", args);
         let _r = self.log.flush();
     }
 
-    fn handle_event(&mut self, event: Event) -> Result<Outcome, Error> {
-        match event {
-            Event::Nothing => {
-                Ok(Outcome::Continue)
-            },
 
-            Event::Signal(Signal::CHLD) => {
-                self.handle_sigchld()?;
-                Ok(Outcome::Continue)
-            },
+    pub fn serve(mut self) -> Result<(), Error> {
+        let mut core = Core::new()?;
+        let handle = core.handle();
+        let listener = UnixListener::bind(&self.sock_path, &handle)?;
 
-            Event::Signal(signal) => {
-                server_log!(self, "exiting on fatal signal {:?}", signal);
-                Ok(Outcome::Exit)
-            },
+        log!(self, "starting up");
+        let shared = Arc::new(Mutex::new(self));
+        let log_shared = shared.clone();
 
-            Event::Connection(rconn) => {
-                self.handle_client(rconn?)
-            },
-        }
-    }
+        let server = listener.incoming().for_each(move |(socket, sockaddr)| {
+            process_client(socket, sockaddr, shared.clone());
+            Ok(())
+        }).map_err(move |err| {
+            log!(log_shared.lock().unwrap(), "accept error: {:?}", err);
+        });
 
-    /// Probably a better way to do this stuff but can't figure out something
-    /// that works with the lifetimes.
-    fn find_exited_child(&mut self) -> Result<(String, process::ExitStatus), Error> {
-        for (host, tunnel) in self.children.iter_mut() {
-            if let Some(status) = tunnel.ssh.try_wait()? {
-                return Ok((host.to_owned(), status));
-            }
+        if let Err(_) = core.run(server) {
+            return Err(format_err!("errors occurred listening for connections"));
         }
 
-        Err(format_err!("no child actually exited?"))
-    }
-
-    fn handle_sigchld(&mut self) -> Result<(), Error> {
-        let (host, status) = self.find_exited_child()?;
-        self.children.remove(&host);
-        server_log!(self, "process for {} exited with status {:?}", host, status);
-        // TODO: try to reconnect? But we have no TTY ...
         Ok(())
     }
+}
 
-    fn handle_client(&mut self, mut conn: UnixStream) -> Result<Outcome, Error> {
-        loop {
-            //let msg = bincode::deserialize_from(&conn)?;
-            let msg = from_reader_framed(&mut conn)?;
 
-            let r = match msg {
-                ClientMessage::Open(params) => { self.handle_open(&mut conn, params) },
-                ClientMessage::Exit => { return Ok(Outcome::Exit); } // XXX not waiting for goodbye
-                ClientMessage::Goodbye => { break; },
-                other => {
-                    server_log!(self, "unexpected toplevel message from client: {:?}", other);
-                    break;
-                }
+fn process_client(socket: UnixStream, addr: SocketAddr, shared: Arc<Mutex<State>>) {
+    // Without turning on linger, I find that the tokio-ized version loses
+    // the last bytes of the session. Let's just ignore the return value
+    // of setsockopt(), though.
+
+    unsafe {
+        let linger = libc::linger { l_onoff: 1, l_linger: 2 };
+        libc::setsockopt(socket.as_raw_fd(), libc::SOL_SOCKET, libc::SO_LINGER,
+                         (&linger as *const libc::linger) as _,
+                         mem::size_of::<libc::linger>() as libc::socklen_t);
+    }
+
+    let (read, write) = socket.split();
+    let wdelim = FramedWrite::new(write);
+    let ser = WriteJson::new(wdelim);
+    let rdelim = FramedRead::new(read);
+    let de = ReadJson::new(rdelim);
+
+    let shared2 = shared.clone();
+    let shared3 = shared.clone();
+
+    let common = ClientCommonState {
+        shared: shared,
+        addr: addr,
+    };
+
+    let wrapped = Client::start(common, ser, de.into_future()).map(move |(_common, _ser, _de)| {
+        log!(shared2.lock().unwrap(), "client session finished");
+    }).map_err(move |err| {
+        log!(shared3.lock().unwrap(), "error from client session: {:?}", err);
+    });
+
+    tokio::spawn(wrapped);
+}
+
+struct ClientCommonState {
+    shared: Arc<Mutex<State>>,
+    addr: SocketAddr,
+}
+
+#[derive(StateMachineFuture)]
+#[allow(unused)] // get lots of these spuriously; custom derive stuff?
+enum Client {
+    #[state_machine_future(start, transitions(AwaitingCommand, CommunicatingForOpen, Finished, Aborting))]
+    AwaitingCommand {
+        common: ClientCommonState,
+        tx: Ser,
+        rx: StreamFuture<De>,
+    },
+
+    #[state_machine_future(transitions(Aborting, CommunicatingForOpen, FinalizingOpen))]
+    CommunicatingForOpen {
+        common: ClientCommonState,
+        cl_tx: Either<Ser, Send<Ser>>,
+        cl_rx: StreamFuture<De>,
+        ssh_rx: StreamFuture<Receiver<u8>>,
+        ptymaster: fs::File,
+        buf: Vec<u8>,
+        saw_end: bool,
+    },
+
+    #[state_machine_future(transitions(AwaitingCommand))]
+    FinalizingOpen {
+        common: ClientCommonState,
+        tx: Send<Ser>,
+        rx: StreamFuture<De>,
+    },
+
+    #[state_machine_future(ready)]
+    Finished((ClientCommonState, Ser, De)),
+
+    #[state_machine_future(transitions(Aborting, Failed))]
+    Aborting {
+        common: ClientCommonState,
+        tx: Send<Ser>,
+        rx: Either<De, StreamFuture<De>>,
+        message: Option<String>,
+    },
+
+    #[state_machine_future(error)]
+    Failed(Error),
+}
+
+
+impl PollClient for Client {
+    fn poll_awaiting_command<'a>(
+        state: &'a mut RentToOwn<'a, AwaitingCommand>
+    ) -> Poll<AfterAwaitingCommand, Error> {
+        let (msg, de) = match state.rx.poll() {
+            Ok(Async::Ready((msg, de))) => (msg, de),
+            Ok(Async::NotReady) => {
+                return Ok(Async::NotReady);
+            },
+            Err((e, _de)) => {
+                return Err(e.into());
+            }
+        };
+
+        let mut state = state.take();
+
+        match msg {
+            None => {
+                state.rx = de.into_future();
+                transition!(state);
+            },
+
+            Some(ClientMessage::Open(params)) => {
+                return handle_client_open(state.common, state.tx, de, params);
+            },
+
+            Some(ClientMessage::Exit) => {
+                println!("XXX handle exit");
+                transition!(Finished((state.common, state.tx, de)));
+            },
+
+            Some(ClientMessage::Goodbye) => {
+                transition!(Finished((state.common, state.tx, de)));
+            },
+
+            Some(other) => {
+                return Err(format_err!("unexpected message from client: {:?}", other));
+            },
+        }
+    }
+
+    fn poll_communicating_for_open<'a>(
+        state: &'a mut RentToOwn<'a, CommunicatingForOpen>
+    ) -> Poll<AfterCommunicatingForOpen, Error> {
+        // New text from the user?
+
+        let de = {
+            let outcome = match state.cl_rx.poll() {
+                Ok(x) => x,
+                Err((e, _de)) => {
+                    return Err(e.into());
+                },
             };
 
-            if let Err(e) = r {
-                //if let Err(e2) = bincode::serialize_into(conn, &server_error!("{}", e)) {
-                if let Err(e2) = to_writer_framed(&mut conn, &server_error!("{}", e)) {
-                    server_log!(self, "error doing work for client to be reported next");
-                    server_log!(self, "additional error encountered reporting error to client: {}", e2);
-                }
-
-                return Err(e.context("error reported to client").into());
-            }
-        }
-
-        Ok(Outcome::Continue)
-    }
-
-    fn handle_open(&mut self, conn: &mut UnixStream, params: OpenParameters) -> Result<(), Error> {
-        // Start with the PTY.
-
-        let mut ptymaster = pty::create().context("failed to create PTY")?;
-
-        let child = process::Command::new("ssh")
-            .arg("-N")
-            .arg(&params.host)
-            .env_remove("DISPLAY")
-            .slave_to_pty(&ptymaster).context("failed to set up PTY slave")?
-            .spawn().context("failed to launch SSH command")?;
-
-        // To reap children properly, we need to log them here, before we know
-        // if we've actually set up the SSH session fully.
-        self.children.insert(params.host, Tunnel {
-            ssh: child,
-            ptymaster: ptymaster.try_clone().context("failed to duplicate PTY master")?,
-        });
-
-        // Next, forward any I/O needed to execute the login. It feels pretty
-        // dumb to use threads for this but meh. The initial OK message tells
-        // the client that it can start forwarding I/O.
-
-        //bincode::serialize_into(conn, &ServerMessage::Ok)?;
-        to_writer_framed(conn, &ServerMessage::Ok)?;
-
-        // Thread 1 reads from SSH.
-
-        let mut master_clone = ptymaster.try_clone().context("failed to duplicate PTY master")?;
-        let (sdata1, rdata1) = chan::async();
-        let (serror1, rerror1) = chan::async();
-        let (squit1, rquit1) = chan::sync::<()>(0);
-
-        thread::spawn(move || {
-            let mut buf = [0u8; 512];
-
-            loop {
-                let n = match master_clone.read(&mut buf) {
-                    Ok(n) => n,
-                    Err(e) => {
-                        serror1.send(e);
-                        break;
-                    },
-                };
-
-                sdata1.send(buf[..n].to_owned());
-                
-                chan_select! {
-                    default => {},
-                    rquit1.recv() => { break; },
-                }
-            }
-        });
-
-        // Thread 2 reads from the client
-
-        let mut conn_clone = unsafe { UnixStream::from_raw_fd(conn.as_raw_fd()) };
-        let (sdata2, rdata2) = chan::async();
-        let (serror2, rerror2) = chan::async();
-        let (squit2, rquit2) = chan::sync::<()>(0);
-
-        thread::spawn(move || {
-            loop {
-                //let msg = match bincode::deserialize_from(&conn_clone) {
-                let msg = match from_reader_framed(&mut conn_clone) {
-                    Ok(m) => m,
-                    Err(e) => {
-                        serror2.send(e);
-                        break;
-                    },
-                };
-
-                sdata2.send(msg);
-
-                chan_select! {
-                    default => {},
-                    rquit2.recv() => { break; },
-                }
-            }
-
-            mem::forget(conn_clone);
-        });
-
-        // And now we orchestrate it all.
-
-        loop {
-            chan_select! {
-                rdata1.recv() -> o => {
-                    if let Some(ssh_data) = o {
-                        server_log!(self, "rdata1: {:?}", ssh_data);
-                        //bincode::serialize_into(conn, &ServerMessage::SshData(ssh_data))?;
-                        to_writer_framed(conn, &ServerMessage::SshData(ssh_data))?;
-                    }
-                },
-
-                rdata2.recv() -> o => {
-                    if let Some(msg) = o {
-                        server_log!(self, "rdata2: {:?}", msg);
-                        match msg {
-                            ClientMessage::EndOfUserData => {
-                                break;
-                            },
-
-                            ClientMessage::UserData(ref data) => {
-                                ptymaster.write_all(data)?;
-                            },
-
-                            other => {
-                                server_log!(self, "unexpected client message during SSH setup: {:?}", other);
-                                break;
-                            },
+            if let Async::Ready((msg, de)) = outcome {
+                match msg {
+                    Some(ClientMessage::UserData(data)) => {
+                        if state.saw_end {
+                            return Err(format_err!("client changed its mind about being finished"));
                         }
-                    }
-                },
 
-                rerror1.recv() -> o => {
-                    if let Some(err) = o {
-                        server_log!(self, "error reading from SSH: {}", err);
-                        break;
-                    }
-                },
+                        if let Err(e) = state.ptymaster.write_all(&data) {
+                            let msg = format!("error writing to SSH process: {}", e);
+                            let mut state = state.take();
+                            transition!(abort_client(state.common, state.cl_tx, de, msg));
+                        }
+                    },
 
-                rerror2.recv() -> o => {
-                    if let Some(err) = o {
-                        server_log!(self, "error reading from client: {}", err);
-                        break;
-                    }
+                    Some(ClientMessage::EndOfUserData) => {
+                        state.saw_end = true;
+                    },
+
+                    Some(other) => {
+                        // Could consider aborting here, but if we didn't
+                        // understand the client then probably there's
+                        // something messed up about the channel.
+                        return Err(format_err!("unexpected message from the client: {:?}", other));
+                    },
+
+                    None => {},
+                }
+
+                Some(de)
+            } else {
+                None
+            }
+        };
+
+        // New text from SSH?
+
+        let rcvr = {
+            let outcome = match state.ssh_rx.poll() {
+                Ok(x) => x,
+                Err((_, _stdin)) => {
+                    let msg = format!("something went wrong communicating with the SSH process");
+                    let mut state = state.take();
+                    let rx = if let Some(updated) = de {
+                        updated.into_either_rx()
+                    } else {
+                        state.cl_rx.into_either_rx()
+                    };
+                    transition!(abort_client(state.common, state.cl_tx, rx, msg));
                 },
+            };
+
+            if let Async::Ready((byte, stdin)) = outcome {
+                if let Some(b) = byte {
+                    state.buf.push(b);
+                }
+
+                Some(stdin)
+            } else {
+                None
+            }
+        };
+
+        // Ready/able to send bytes to the client?
+
+        let mut state = state.take();
+
+        let cl_tx = match state.cl_tx {
+            Either::A(ser) => {
+                if state.buf.len() != 0 {
+                    let send = ser.send(ServerMessage::SshData(state.buf.clone()));
+                    state.buf.clear();
+                    Either::B(send)
+                } else {
+                    Either::A(ser)
+                }
+            },
+
+            Either::B(mut send) => {
+                Either::A(try_ready!(send.poll()))
+            },
+        };
+
+        // What's next? Even if we're finished, we can't transition to the
+        // next state until we're ready to send the OK message.
+
+        if let Some(rcvr) = rcvr {
+            state.ssh_rx = rcvr.into_future();
+        }
+
+        if let Some(de) = de {
+            state.cl_rx = de.into_future();
+        }
+
+        if state.saw_end {
+            if let Either::A(ser) = cl_tx {
+                // XXX: stash handle to SSH pty
+
+                let send = ser.send(ServerMessage::Ok);
+                transition!(FinalizingOpen {
+                    common: state.common,
+                    tx: send,
+                    rx: state.cl_rx,
+                });
             }
         }
 
-        server_log!(self, "here");
-        mem::drop(squit1); // cause the rquit1 channel to sync
-        mem::drop(squit2);
-
-        //bincode::serialize_into(conn, &ServerMessage::Ok)?;
-        to_writer_framed(conn, &ServerMessage::Ok)?;
-        server_log!(self, "finally");
-        Ok(())
+        state.cl_tx = cl_tx;
+        transition!(state);
     }
-}
 
-#[derive(Debug)]
-enum Event {
-    Signal(chan_signal::Signal),
-    Connection(Result<UnixStream, io::Error>),
-    Nothing,
-}
+    fn poll_finalizing_open<'a>(
+        state: &'a mut RentToOwn<'a, FinalizingOpen>
+    ) -> Poll<AfterFinalizingOpen, Error> {
+        let mut state = state.take();
+        let ser = try_ready!(state.tx.poll());
 
-#[derive(Debug)]
-enum Outcome {
-    Continue,
-    Exit,
-}
+        transition!(AwaitingCommand {
+            common: state.common,
+            tx: ser,
+            rx: state.rx,
+        });
+    }
 
-#[derive(Debug, Deserialize, PartialEq, Serialize)]
-pub enum ClientMessage {
-    /// Open an SSH tunnel
-    Open(OpenParameters),
+    fn poll_aborting<'a>(
+        state: &'a mut RentToOwn<'a, Aborting>
+    ) -> Poll<AfterAborting, Error> {
+        let ser = try_ready!(state.tx.poll());
+        let mut state = state.take();
 
-    /// User input to be sent to SSH
-    UserData(Vec<u8>),
-
-    /// User input has concluded.
-    EndOfUserData,
-
-    /// Tell the daemon to exit
-    Exit,
-
-    /// End the session.
-    Goodbye,
-}
-
-#[derive(Debug, Deserialize, PartialEq, Serialize)]
-pub enum ServerMessage {
-    Ok,
-    SshData(Vec<u8>),
-    Error(String),
-}
-
-
-#[derive(Debug, Deserialize, PartialEq, Serialize)]
-pub struct OpenParameters {
-    host: String
-}
-
-impl<'a> From<&'a StundOpenOptions> for OpenParameters {
-    fn from(opts: &'a StundOpenOptions) -> Self {
-        OpenParameters {
-            host: opts.host.clone(),
+        if let Some(msg) = state.message {
+            state.tx = ser.send(ServerMessage::Error(msg));
+            state.message = None;
+            transition!(state)
+        } else {
+            Err(format_err!("ending connection now that client has been notified"))
         }
     }
+}
+
+
+// Little framework for being able to transition into an "abort" state, where
+// we notify the client of an error and then close the connection. The tricky
+// part is that we'd like this to work regardless of whether we're in `Ser`
+// state or `Send<Ser>` state. In the latter, we need to wait for the previous
+// send to complete before we can send the error message. Ditto for the
+// reception side, although we do not plan to listen for any more data on this
+// connection.
+
+trait IntoEitherTx { fn into_either_tx(self) -> Either<Ser, Send<Ser>>; }
+
+impl IntoEitherTx for Ser {
+    fn into_either_tx(self) -> Either<Ser, Send<Ser>> { Either::A(self) }
+}
+
+impl IntoEitherTx for Send<Ser> {
+    fn into_either_tx(self) -> Either<Ser, Send<Ser>> { Either::B(self) }
+}
+
+impl IntoEitherTx for Either<Ser, Send<Ser>> {
+    fn into_either_tx(self) -> Either<Ser, Send<Ser>> { self }
+}
+
+trait IntoEitherRx { fn into_either_rx(self) -> Either<De, StreamFuture<De>>; }
+
+impl IntoEitherRx for De {
+    fn into_either_rx(self) -> Either<De, StreamFuture<De>> { Either::A(self) }
+}
+
+impl IntoEitherRx for StreamFuture<De> {
+    fn into_either_rx(self) -> Either<De, StreamFuture<De>> { Either::B(self) }
+}
+
+impl IntoEitherRx for Either<De, StreamFuture<De>> {
+    fn into_either_rx(self) -> Either<De, StreamFuture<De>> { self }
+}
+
+fn abort_client<T: IntoEitherTx, R: IntoEitherRx>(
+    common: ClientCommonState, tx: T, rx: R, message: String
+) -> Aborting {
+    let tx = tx.into_either_tx();
+    let rx = rx.into_either_rx();
+
+    let (tx, msg) = match tx {
+        Either::A(ser) => {
+            (ser.send(ServerMessage::Error(message)), None)
+        },
+
+        Either::B(snd) => {
+            (snd, Some(message))
+        },
+    };
+
+    Aborting {
+        common: common,
+        tx: tx,
+        rx: rx,
+        message: msg,
+    }
+}
+
+
+fn handle_client_open(
+    common: ClientCommonState, tx: Ser, rx: De, params: OpenParameters
+) -> Poll<AfterAwaitingCommand, Error> {
+    let result = {
+        let mut shared = common.shared.lock().unwrap();
+        handle_client_open_inner(&mut shared, &params)
+    };
+
+    let (ptymaster1, ptymaster2) = match result {
+        Ok(m) => m,
+
+        Err(e) => { // We have to tell the client that something went wrong.
+            transition!(abort_client(common, tx, rx, format!("{}", e)));
+        }
+    };
+
+    let tx = tx.send(ServerMessage::Ok);
+    let ssh_rx = spawn_monitor(ptymaster1, 512);
+
+    transition!(CommunicatingForOpen {
+        common: common,
+        cl_tx: Either::B(tx),
+        cl_rx: rx.into_future(),
+        ssh_rx: ssh_rx.into_future(),
+        ptymaster: ptymaster2,
+        buf: Vec::new(),
+        saw_end: false,
+    });
+}
+
+fn handle_client_open_inner(shared: &mut State, params: &OpenParameters) -> Result<(fs::File, fs::File), Error> {
+    // First, the PTY.
+
+    let ptymaster = pseudotty::create().context("failed to create PTY")?;
+    let ptymaster_dup = ptymaster.try_clone().context("failed to clone PTY handle")?;
+    let ptymaster_dup2 = ptymaster.try_clone().context("failed to clone PTY handle")?;
+
+    let child = process::Command::new("ssh")
+        .arg("-N")
+        .arg(&params.host)
+        .env_remove("DISPLAY")
+        .slave_to_pty(&ptymaster).context("failed to set up PTY slave")?
+        .spawn().context("failed to launch SSH command")?;
+
+    // To reap children properly, we need to log them here -- note that this
+    // is before we know if we've actually set up the SSH session fully.
+
+    shared.children.insert(params.host.clone(), Tunnel {
+        ssh: child,
+        ptymaster: ptymaster_dup,
+    });
+
+    Ok((ptymaster, ptymaster_dup2))
+}
+
+
+
+struct Tunnel {
+    ssh: process::Child,
+
+    /// Needed to maintain the SSH daemon's PTY! Otherwise it SIGHUPs and dies
+    /// if it tries to do any output.
+    #[allow(unused)] ptymaster: fs::File,
+}
+
+
+/// This just duplicates what tokio-stdin does.
+pub fn spawn_monitor<R: 'static + Read + StdSend>(thing: R, buffer: usize) -> Receiver<u8> {
+    // TODO: we need to know when to quit! Or maybe we actually don't.
+    use futures::stream::iter_result;
+    use futures::sync::mpsc::{channel};
+    use std::thread;
+
+    let (channel_sink, channel_stream) = channel(buffer);
+    let reader_sink = channel_sink.sink_map_err(|e| Error::from(e));
+
+    thread::spawn(move || {
+        let _r = iter_result(thing.bytes())
+            .map_err(|e| Error::from(e))
+            .forward(reader_sink)
+            .wait();
+    });
+
+    channel_stream
 }

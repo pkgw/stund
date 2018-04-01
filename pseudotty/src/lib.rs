@@ -5,7 +5,8 @@
 //!
 //! Procedure based on http://rachid.koucha.free.fr/tech_corner/pty_pdip.html.
 
-use libc;
+extern crate libc;
+
 use std::ffi::{CStr, OsStr};
 use std::fs::{File, OpenOptions};
 use std::io;

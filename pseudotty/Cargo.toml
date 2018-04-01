@@ -1,0 +1,7 @@
+[package]
+name = "pseudotty"
+version = "0.1.0"
+authors = ["Peter Williams <peter@newton.cx>"]
+
+[dependencies]
+libc = "0.2"

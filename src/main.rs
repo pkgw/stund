@@ -12,11 +12,13 @@ extern crate daemonize;
 #[macro_use] extern crate failure;
 #[macro_use] extern crate futures;
 extern crate libc;
+extern crate pseudotty;
 extern crate serde;
 extern crate serde_json;
 #[macro_use] extern crate serde_derive;
 #[macro_use] extern crate state_machine_future;
 #[macro_use] extern crate structopt;
+extern crate stund;
 extern crate tokio;
 extern crate tokio_core;
 extern crate tokio_io;
@@ -31,8 +33,8 @@ use std::process;
 use structopt::StructOpt;
 
 mod daemon;
+mod olddaemon;
 mod new;
-mod pty;
 
 
 #[derive(Debug, StructOpt)]
@@ -43,7 +45,9 @@ pub struct StundDaemonOptions {
 
 impl StundDaemonOptions {
     fn cli(self) -> Result<i32, Error> {
-        daemon::Server::launch(self)
+        let d = daemon::State::new(self)?;
+        d.serve()?;
+        Ok(0)
     }
 }
 
@@ -56,8 +60,8 @@ impl StundExitOptions {
     fn cli(self) -> Result<i32, Error> {
         // Note that if the daemon isn't running this will be dumb and start
         // it ...
-        let mut conn = daemon::DaemonConnection::new()?;
-        conn.send_message(&daemon::ClientMessage::Exit)?;
+        let mut conn = olddaemon::DaemonConnection::new()?;
+        conn.send_message(&olddaemon::ClientMessage::Exit)?;
         Ok(0)
     }
 }

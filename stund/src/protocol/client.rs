@@ -1,7 +1,7 @@
 // Copyright 2018 Peter Williams <peter@newton.cx>
 // Licensed under the MIT License.
 
-//! Interfacing with the daemon.
+//! Clients that talk to the daemon.
 
 use atty;
 use failure::Error;
@@ -11,11 +11,9 @@ use futures::stream::StreamFuture;
 use futures::sync::mpsc::Receiver;
 use libc;
 use state_machine_future::RentToOwn;
-use std::env;
 use std::io;
 use std::mem;
 use std::os::unix::io::AsRawFd;
-use std::path::PathBuf;
 use tokio::prelude::*;
 use tokio_core::reactor::Core;
 use tokio_io::codec::length_delimited::{FramedRead, FramedWrite};
@@ -24,26 +22,73 @@ use tokio_serde_json::{ReadJson, WriteJson};
 use tokio_stdin;
 use tokio_uds::UnixStream;
 
-use stund::*;
-use stund::protocol::*;
-use super::StundOpenOptions;
+use super::*;
 
-fn get_socket_path() -> Result<PathBuf, Error> {
-    let mut p = env::home_dir().ok_or(format_err!("unable to determine your home directory"))?;
-    p.push(".ssh");
-    p.push("stund.sock");
-    Ok(p)
+
+pub type Ser = WriteJson<FramedWrite<WriteHalf<UnixStream>>, ClientMessage>;
+pub type De = ReadJson<FramedRead<ReadHalf<UnixStream>>, ServerMessage>;
+
+
+pub struct Connection {
+    core: Core,
+    ser: Ser,
+    de: De,
 }
 
-type Ser = WriteJson<FramedWrite<WriteHalf<UnixStream>>, ClientMessage>;
-type De = ReadJson<FramedRead<ReadHalf<UnixStream>>, ServerMessage>;
+
+impl Connection {
+    pub fn establish() -> Result<Self, Error> {
+        let core = Core::new()?;
+        let handle = core.handle();
+        let conn = UnixStream::connect(get_socket_path()?, &handle)?;
+
+        unsafe {
+            // Without turning on linger, I find that the tokio-ized version
+            // loses the last bytes of the session. Let's just ignore the
+            // return value of setsockopt(), though.
+            let linger = libc::linger { l_onoff: 1, l_linger: 2 };
+            libc::setsockopt(conn.as_raw_fd(), libc::SOL_SOCKET, libc::SO_LINGER,
+                             (&linger as *const libc::linger) as _,
+                             mem::size_of::<libc::linger>() as libc::socklen_t);
+        }
+
+        let (read, write) = conn.split();
+        let wdelim = FramedWrite::new(write);
+        let ser = WriteJson::new(wdelim);
+        let rdelim = FramedRead::new(read);
+        let de = ReadJson::new(rdelim);
+
+        Ok(Connection {
+            core: core,
+            ser: ser,
+            de: de,
+        })
+    }
+
+
+    pub fn close(mut self) -> Result<(), Error> {
+        self.core.run(self.ser.send(ClientMessage::Goodbye))?;
+        Ok(())
+    }
+
+
+    pub fn send_open(mut self, params: OpenParameters) -> Result<Self, Error> {
+        let fut = self.ser.send(ClientMessage::Open(params));
+        let result = self.core.run(OpenWorkflow::start(self.de, fut));
+        toggle_terminal_echo(true);
+        let (ser, de) = result?;
+        println!("[Success]");
+        self.ser = ser;
+        self.de = de;
+        Ok(self)
+    }
+}
 
 #[derive(StateMachineFuture)]
 #[allow(unused)] // get lots of these spuriously; custom derive stuff?
 enum OpenWorkflow {
     #[state_machine_future(start, transitions(FirstAck))]
     Issue {
-        opts: StundOpenOptions,
         de: De,
         transmission: Send<Ser>,
     },
@@ -117,37 +162,6 @@ impl FinishCommunicationState {
 }
 
 
-pub fn new_open(opts: StundOpenOptions) -> Result<(), Error> {
-    let mut core = Core::new()?;
-    let handle = core.handle();
-    let conn = UnixStream::connect(get_socket_path()?, &handle)?;
-
-    unsafe {
-        // Without turning on linger, I find that the tokio-ized version loses
-        // the last bytes of the session. Let's just ignore the return value
-        // of setsockopt(), though.
-        let linger = libc::linger { l_onoff: 1, l_linger: 2 };
-        libc::setsockopt(conn.as_raw_fd(), libc::SOL_SOCKET, libc::SO_LINGER,
-                         (&linger as *const libc::linger) as _,
-                         mem::size_of::<libc::linger>() as libc::socklen_t);
-    }
-
-    let (read, write) = conn.split();
-    let wdelim = FramedWrite::new(write);
-    let ser = WriteJson::new(wdelim);
-    let rdelim = FramedRead::new(read);
-    let de = ReadJson::new(rdelim);
-    let fut = ser.send(ClientMessage::Open(OpenParameters { host: opts.host.clone() }));
-    let result = core.run(OpenWorkflow::start(opts, de, fut));
-    toggle_terminal_echo(true);
-    let (ser, _de) = result?;
-    println!("[Success]");
-
-    core.run(ser.send(ClientMessage::Goodbye))?;
-
-    Ok(())
-}
-
 impl PollOpenWorkflow for OpenWorkflow {
     fn poll_issue<'a>(
         state: &'a mut RentToOwn<'a, Issue>
@@ -186,9 +200,7 @@ impl PollOpenWorkflow for OpenWorkflow {
             },
 
             None => {
-                let mut state = state.take();
-                state.reception = de.into_future();
-                transition!(state);
+                transition!(state.take());
             },
         }
 
