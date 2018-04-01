@@ -230,6 +230,7 @@ impl Server {
 
     fn log_items(&mut self, args: fmt::Arguments) {
         let _r = writeln!(self.log, "{}", args);
+        let _r = self.log.flush();
     }
 
     fn handle_event(&mut self, event: Event) -> Result<Outcome, Error> {
