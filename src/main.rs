@@ -5,14 +5,25 @@
 
 extern crate atty;
 extern crate bincode;
+extern crate byteorder;
 #[macro_use] extern crate chan;
 extern crate chan_signal;
 extern crate daemonize;
 #[macro_use] extern crate failure;
+#[macro_use] extern crate futures;
 extern crate libc;
 extern crate serde;
+extern crate serde_json;
 #[macro_use] extern crate serde_derive;
+#[macro_use] extern crate state_machine_future;
 #[macro_use] extern crate structopt;
+extern crate tokio;
+extern crate tokio_core;
+extern crate tokio_io;
+extern crate tokio_serde_json;
+extern crate tokio_signal;
+extern crate tokio_stdin;
+extern crate tokio_uds;
 extern crate unix_socket;
 
 use failure::Error;
@@ -23,6 +34,7 @@ use std::thread;
 use structopt::StructOpt;
 
 mod daemon;
+mod new;
 mod pty;
 
 use daemon::ServerMessage;
@@ -91,8 +103,13 @@ fn toggle_terminal_echo(active: bool) {
 
 impl StundOpenOptions {
     fn cli(self) -> Result<i32, Error> {
+        new::new_open(self)?;
+        Ok(0)
+    }
+
+    fn _oldcli(self) -> Result<i32, Error> {
         let mut conn = daemon::DaemonConnection::new()?;
-        conn.send_message(&daemon::ClientMessage::Open(self.into()))?;
+        conn.send_message(&daemon::ClientMessage::Open((&self).into()))?;
 
         match conn.recv_message()? {
             daemon::ServerMessage::Ok => {},
@@ -156,6 +173,7 @@ impl StundOpenOptions {
                     },
                 };
 
+                println!("msg: {:?}", msg);
                 sdata2.send(msg);
 
                 chan_select! {

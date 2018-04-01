@@ -3,12 +3,13 @@
 
 //! Interfacing with the daemon.
 
-use bincode;
+//use bincode;
 use chan;
 use chan_signal::{self, Signal};
 use daemonize;
 use failure::{Error, ResultExt};
 use pty::{self, CommandPtyExt};
+use serde_json;
 use std::collections::HashMap;
 use std::env;
 use std::fmt;
@@ -78,12 +79,14 @@ impl DaemonConnection {
     }
 
     pub fn send_message(&mut self, msg: &ClientMessage) -> Result<(), Error> {
-        bincode::serialize_into(&self.sock, msg)?;
+        //bincode::serialize_into(&self.sock, msg)?;
+        serde_json::to_writer(&self.sock, msg)?;
         Ok(())
     }
 
     pub fn recv_message(&mut self) -> Result<ServerMessage, Error> {
-        Ok(bincode::deserialize_from(&self.sock)?)
+        //Ok(bincode::deserialize_from(&self.sock)?)
+        Ok(serde_json::from_reader(&self.sock)?)
     }
 
     // Hack hack hack
@@ -94,7 +97,8 @@ impl DaemonConnection {
 
 impl Drop for DaemonConnection {
     fn drop(&mut self) {
-        let _r = bincode::serialize_into(&self.sock, &ClientMessage::Goodbye);
+        //let _r = bincode::serialize_into(&self.sock, &ClientMessage::Goodbye);
+        let _r = serde_json::to_writer(&self.sock, &ClientMessage::Goodbye);
     }
 }
 
@@ -123,6 +127,24 @@ macro_rules! server_error {
     ($fmt:expr, $($args:tt)*) => { ServerMessage::Error(format!($fmt, $($args)*)) };
 }
 
+fn to_writer_framed(conn: &mut UnixStream, item: &ServerMessage) -> Result<(), Error> {
+    use byteorder::{BigEndian, WriteBytesExt};
+    let vec = serde_json::to_vec(item)?;
+    conn.write_u32::<BigEndian>(vec.len() as u32)?;
+    conn.write_all(&vec)?;
+    Ok(())
+}
+
+fn from_reader_framed(conn: &mut UnixStream) -> Result<ClientMessage, Error> {
+    use byteorder::{BigEndian, ReadBytesExt};
+    let n = conn.read_u32::<BigEndian>()?;
+    let mut vec = Vec::with_capacity(n as usize);
+    unsafe { vec.set_len(n as usize); }
+    conn.read_exact(&mut vec)?;
+    let val = serde_json::from_slice(&vec)?;
+    Ok(val)
+}
+    
 impl Server {
     pub fn launch(opts: StundDaemonOptions) -> Result<i32, Error> {
         let p = get_socket_path()?;
@@ -275,12 +297,13 @@ impl Server {
         Ok(())
     }
 
-    fn handle_client(&mut self, conn: UnixStream) -> Result<Outcome, Error> {
+    fn handle_client(&mut self, mut conn: UnixStream) -> Result<Outcome, Error> {
         loop {
-            let msg = bincode::deserialize_from(&conn)?;
+            //let msg = bincode::deserialize_from(&conn)?;
+            let msg = from_reader_framed(&mut conn)?;
 
             let r = match msg {
-                ClientMessage::Open(params) => { self.handle_open(&conn, params) },
+                ClientMessage::Open(params) => { self.handle_open(&mut conn, params) },
                 ClientMessage::Exit => { return Ok(Outcome::Exit); } // XXX not waiting for goodbye
                 ClientMessage::Goodbye => { break; },
                 other => {
@@ -290,7 +313,8 @@ impl Server {
             };
 
             if let Err(e) = r {
-                if let Err(e2) = bincode::serialize_into(conn, &server_error!("{}", e)) {
+                //if let Err(e2) = bincode::serialize_into(conn, &server_error!("{}", e)) {
+                if let Err(e2) = to_writer_framed(&mut conn, &server_error!("{}", e)) {
                     server_log!(self, "error doing work for client to be reported next");
                     server_log!(self, "additional error encountered reporting error to client: {}", e2);
                 }
@@ -302,7 +326,7 @@ impl Server {
         Ok(Outcome::Continue)
     }
 
-    fn handle_open(&mut self, conn: &UnixStream, params: OpenParameters) -> Result<(), Error> {
+    fn handle_open(&mut self, conn: &mut UnixStream, params: OpenParameters) -> Result<(), Error> {
         // Start with the PTY.
 
         let mut ptymaster = pty::create().context("failed to create PTY")?;
@@ -325,7 +349,8 @@ impl Server {
         // dumb to use threads for this but meh. The initial OK message tells
         // the client that it can start forwarding I/O.
 
-        bincode::serialize_into(conn, &ServerMessage::Ok)?;
+        //bincode::serialize_into(conn, &ServerMessage::Ok)?;
+        to_writer_framed(conn, &ServerMessage::Ok)?;
 
         // Thread 1 reads from SSH.
 
@@ -357,14 +382,15 @@ impl Server {
 
         // Thread 2 reads from the client
 
-        let conn_clone = unsafe { UnixStream::from_raw_fd(conn.as_raw_fd()) };
+        let mut conn_clone = unsafe { UnixStream::from_raw_fd(conn.as_raw_fd()) };
         let (sdata2, rdata2) = chan::async();
         let (serror2, rerror2) = chan::async();
         let (squit2, rquit2) = chan::sync::<()>(0);
 
         thread::spawn(move || {
             loop {
-                let msg = match bincode::deserialize_from(&conn_clone) {
+                //let msg = match bincode::deserialize_from(&conn_clone) {
+                let msg = match from_reader_framed(&mut conn_clone) {
                     Ok(m) => m,
                     Err(e) => {
                         serror2.send(e);
@@ -389,14 +415,15 @@ impl Server {
             chan_select! {
                 rdata1.recv() -> o => {
                     if let Some(ssh_data) = o {
-                        //println!("rdata1: {:?}", ssh_data);
-                        bincode::serialize_into(conn, &ServerMessage::SshData(ssh_data))?;
+                        server_log!(self, "rdata1: {:?}", ssh_data);
+                        //bincode::serialize_into(conn, &ServerMessage::SshData(ssh_data))?;
+                        to_writer_framed(conn, &ServerMessage::SshData(ssh_data))?;
                     }
                 },
 
                 rdata2.recv() -> o => {
                     if let Some(msg) = o {
-                        //println!("rdata2: {:?}", msg);
+                        server_log!(self, "rdata2: {:?}", msg);
                         match msg {
                             ClientMessage::EndOfUserData => {
                                 break;
@@ -430,10 +457,13 @@ impl Server {
             }
         }
 
+        server_log!(self, "here");
         mem::drop(squit1); // cause the rquit1 channel to sync
         mem::drop(squit2);
 
-        bincode::serialize_into(conn, &ServerMessage::Ok)?;
+        //bincode::serialize_into(conn, &ServerMessage::Ok)?;
+        to_writer_framed(conn, &ServerMessage::Ok)?;
+        server_log!(self, "finally");
         Ok(())
     }
 }
@@ -482,10 +512,10 @@ pub struct OpenParameters {
     host: String
 }
 
-impl From<StundOpenOptions> for OpenParameters {
-    fn from(opts: StundOpenOptions) -> Self {
+impl<'a> From<&'a StundOpenOptions> for OpenParameters {
+    fn from(opts: &'a StundOpenOptions) -> Self {
         OpenParameters {
-            host: opts.host,
+            host: opts.host.clone(),
         }
     }
 }
