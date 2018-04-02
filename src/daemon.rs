@@ -8,7 +8,7 @@ use failure::{Error, ResultExt};
 use futures::future::Either;
 use futures::sink::Send;
 use futures::stream::StreamFuture;
-use futures::sync::mpsc::Receiver;
+use futures::sync::mpsc::{channel, Receiver};
 use libc;
 use pseudotty::{self, CommandPtyExt};
 use state_machine_future::RentToOwn;
@@ -30,6 +30,7 @@ use tokio_core::reactor::Core;
 use tokio_io::codec::length_delimited::{FramedRead, FramedWrite};
 use tokio_io::io::{ReadHalf, WriteHalf};
 use tokio_serde_json::{ReadJson, WriteJson};
+use tokio_signal;
 use tokio_stdin;
 use tokio_uds::{UnixListener, UnixStream};
 
@@ -37,6 +38,21 @@ use super::*;
 
 type Ser = WriteJson<FramedWrite<WriteHalf<UnixStream>>, ServerMessage>;
 type De = ReadJson<FramedRead<ReadHalf<UnixStream>>, ClientMessage>;
+
+
+const FATAL_SIGNALS: &[i32] = &[
+    libc::SIGABRT,
+    libc::SIGBUS,
+    libc::SIGFPE,
+    libc::SIGHUP,
+    libc::SIGILL,
+    libc::SIGINT,
+    libc::SIGKILL,
+    libc::SIGPIPE,
+    libc::SIGQUIT,
+    libc::SIGTERM,
+    libc::SIGTRAP,
+];
 
 
 pub struct State {
@@ -71,6 +87,7 @@ impl State {
             },
         }
 
+        // Make sure our socket and logs will be only accessible to us!
         unsafe { libc::umask(0o177); }
 
         let log: Box<Write + StdSend> = if opts.foreground {
@@ -94,6 +111,7 @@ impl State {
     }
 
 
+    /// Don't use this directly; use the log!() macro.
     fn log_items(&mut self, args: fmt::Arguments) {
         let _r = writeln!(self.log, "{}", args);
         let _r = self.log.flush();
@@ -107,19 +125,61 @@ impl State {
 
         log!(self, "starting up");
         let shared = Arc::new(Mutex::new(self));
-        let log_shared = shared.clone();
+        let shared3 = shared.clone();
+
+        // The "main task" is just going to hang out monitoring a channel
+        // waiting for someone to tell it to exit, because we might want to
+        // exit for multiple reasons: we got a bad-news signal, or a client
+        // told us to.
+
+        let (tx_exit, rx_exit) = channel(8);
+
+        // signal handling -- we're forced to have one stream for each signal;
+        // we spawn a task for each of these that forwards an exit
+        // notification to the main task. Shenanigans here because
+        // `.and_then()` requires compatible error types before and after, and
+        // `spawn()` requires both the item and error types to be (). Finally,
+        // we have to clone `tx_exit2` *in the closure* because the `send()`
+        // call consumes the value, which has been captured, and the type
+        // system doesn't/can't know that the closure will only ever be called
+        // once.
+
+        for signal in FATAL_SIGNALS {
+            let sig_stream = tokio_signal::unix::Signal::new(*signal, &handle).flatten_stream();
+            let shared2 = shared.clone();
+            let tx_exit2 = tx_exit.clone();
+
+            let stream = sig_stream
+                .map_err(|_| {})
+                .and_then(move |sig| {
+                    log!(shared2.lock().unwrap(), "exiting on signal {}", sig);
+                    tx_exit2.clone().send(()).map_err(|_| {})
+                });
+
+            let fut = stream.into_future().map(|_| {}).map_err(|_| {});
+
+            handle.spawn(fut);
+        }
+
+        // handling incoming connections -- normally this is the "main" task
+        // of a server, but we have all sorts of cares and worries.
+
+        //let tx_exit2 = tx_exit.clone();
 
         let server = listener.incoming().for_each(move |(socket, sockaddr)| {
+            //process_client(socket, sockaddr, shared.clone(), tx_exit2.clone());
             process_client(socket, sockaddr, shared.clone());
             Ok(())
         }).map_err(move |err| {
-            log!(log_shared.lock().unwrap(), "accept error: {:?}", err);
+            log!(shared3.lock().unwrap(), "accept error: {:?}", err);
         });
 
-        if let Err(_) = core.run(server) {
-            return Err(format_err!("errors occurred listening for connections"));
-        }
+        handle.spawn(server);
 
+        // The return and error values of the wait-to-die task are
+        // meaningless.
+
+        let _r = core.run(rx_exit.into_future());
         Ok(())
     }
 }
@@ -159,6 +219,7 @@ fn process_client(socket: UnixStream, addr: SocketAddr, shared: Arc<Mutex<State>
 
     tokio::spawn(wrapped);
 }
+
 
 struct ClientCommonState {
     shared: Arc<Mutex<State>>,
