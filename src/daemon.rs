@@ -7,13 +7,11 @@ use daemonize;
 use failure::{Error, ResultExt};
 use futures::future::Either;
 use futures::sink::Send;
-use futures::stream::StreamFuture;
-use futures::sync::mpsc::{channel, Receiver};
+use futures::stream::{SplitSink, SplitStream, StreamFuture};
+use futures::sync::mpsc::{channel, Receiver, Sender};
 use libc;
-use pseudotty::{self, CommandPtyExt};
 use state_machine_future::RentToOwn;
 use std::collections::HashMap;
-use std::env;
 use std::fmt;
 use std::fs;
 use std::io;
@@ -22,16 +20,17 @@ use std::mem;
 use std::os::unix::io::AsRawFd;
 use std::os::unix::net::{SocketAddr, UnixStream as StdUnixStream};
 use std::path::PathBuf;
+use std::process::ExitStatus;
 use std::sync::{Arc, Mutex};
-use stund::*;
 use stund::protocol::*;
 use tokio::prelude::*;
-use tokio_core::reactor::Core;
+use tokio_core::reactor::{Core, Handle, Remote}; // TODO: tokio_core is deprecated
 use tokio_io::codec::length_delimited::{FramedRead, FramedWrite};
+use tokio_io::codec::{BytesCodec, Framed};
 use tokio_io::io::{ReadHalf, WriteHalf};
+use tokio_pty_process::{AsyncPtyMaster, Child, CommandExt};
 use tokio_serde_json::{ReadJson, WriteJson};
 use tokio_signal;
-use tokio_stdin;
 use tokio_uds::{UnixListener, UnixStream};
 
 use super::*;
@@ -56,6 +55,7 @@ const FATAL_SIGNALS: &[i32] = &[
 
 
 pub struct State {
+    remote: Option<Remote>,
     sock_path: PathBuf,
     _opts: StundDaemonOptions,
     log: Box<Write + StdSend>,
@@ -103,6 +103,7 @@ impl State {
         };
 
         Ok(State {
+            remote: None,
             sock_path: p,
             _opts: opts,
             log: log,
@@ -121,6 +122,7 @@ impl State {
     pub fn serve(mut self) -> Result<(), Error> {
         let mut core = Core::new()?;
         let handle = core.handle();
+        self.remote = Some(core.remote());
         let listener = UnixListener::bind(&self.sock_path, &handle)?;
 
         log!(self, "starting up");
@@ -241,8 +243,9 @@ enum Client {
         common: ClientCommonState,
         cl_tx: Either<Ser, Send<Ser>>,
         cl_rx: StreamFuture<De>,
-        ssh_rx: StreamFuture<Receiver<u8>>,
-        ptymaster: fs::File,
+        ssh_tx: PtySink,
+        ssh_rx: StreamFuture<PtyStream>,
+        ssh_die: StreamFuture<Receiver<Option<ExitStatus>>>,
         buf: Vec<u8>,
         saw_end: bool,
     },
@@ -331,11 +334,12 @@ impl PollClient for Client {
                             return Err(format_err!("client changed its mind about being finished"));
                         }
 
-                        if let Err(e) = state.ptymaster.write_all(&data) {
-                            let msg = format!("error writing to SSH process: {}", e);
-                            let mut state = state.take();
-                            transition!(abort_client(state.common, state.cl_tx, de, msg));
-                        }
+                        println!("WRITE TO SSH");
+                        //if let Err(e) = state.ptymaster.write_all(&data) {
+                        //    let msg = format!("error writing to SSH process: {}", e);
+                        //    let mut state = state.take();
+                        //    transition!(abort_client(state.common, state.cl_tx, de, msg));
+                        //}
                     },
 
                     Some(ClientMessage::EndOfUserData) => {
@@ -375,9 +379,9 @@ impl PollClient for Client {
                 },
             };
 
-            if let Async::Ready((byte, stdin)) = outcome {
-                if let Some(b) = byte {
-                    state.buf.push(b);
+            if let Async::Ready((bytes, stdin)) = outcome {
+                if let Some(b) = bytes {
+                    state.buf.extend_from_slice(&b);
                 }
 
                 Some(stdin)
@@ -528,12 +532,9 @@ fn abort_client<T: IntoEitherTx, R: IntoEitherRx>(
 fn handle_client_open(
     common: ClientCommonState, tx: Ser, rx: De, params: OpenParameters
 ) -> Poll<AfterAwaitingCommand, Error> {
-    let result = {
-        let mut shared = common.shared.lock().unwrap();
-        handle_client_open_inner(&mut shared, &params)
-    };
+    let result = handle_client_open_inner(common.shared.clone(), &params);
 
-    let (ptymaster1, ptymaster2) = match result {
+    let (ptyread, ptywrite, rx_die) = match result {
         Ok(m) => m,
 
         Err(e) => { // We have to tell the client that something went wrong.
@@ -542,71 +543,160 @@ fn handle_client_open(
     };
 
     let tx = tx.send(ServerMessage::Ok);
-    let ssh_rx = spawn_monitor(ptymaster1, 512);
 
     transition!(CommunicatingForOpen {
         common: common,
         cl_tx: Either::B(tx),
         cl_rx: rx.into_future(),
-        ssh_rx: ssh_rx.into_future(),
-        ptymaster: ptymaster2,
+        ssh_tx: ptywrite,
+        ssh_rx: ptyread.into_future(),
+        ssh_die: rx_die.into_future(),
         buf: Vec::new(),
         saw_end: false,
     });
 }
 
-fn handle_client_open_inner(shared: &mut State, params: &OpenParameters) -> Result<(fs::File, fs::File), Error> {
-    // First, the PTY.
+type PtyStream = SplitStream<Framed<AsyncPtyMaster, BytesCodec>>;
+type PtySink = SplitSink<Framed<AsyncPtyMaster, BytesCodec>>;
 
-    let ptymaster = pseudotty::create().context("failed to create PTY")?;
-    let ptymaster_dup = ptymaster.try_clone().context("failed to clone PTY handle")?;
-    let ptymaster_dup2 = ptymaster.try_clone().context("failed to clone PTY handle")?;
+fn handle_client_open_inner(
+    shared: Arc<Mutex<State>>, params: &OpenParameters
+) -> Result<(PtyStream, PtySink, Receiver<Option<ExitStatus>>), Error> {
+    // A channel that the server can use to tell the SSH monitor task to kill the
+    // process, and a channel that the monitor can use to tell us if SSH died.
+
+    let (tx_kill, rx_kill) = channel(0);
+    let (tx_die, rx_die) = channel(0);
+
+    // Next, the PTY.
+
+    let handle = {
+        let x = shared.lock().unwrap();
+        let y = x.remote.as_ref().unwrap();
+        let z = y.handle().unwrap();
+        z
+    };
+    
+    //let handle = shared.lock().unwrap().remote.as_ref().unwrap().handle().unwrap(); // whee!
+    let ptymaster = AsyncPtyMaster::open(&handle).context("failed to create PTY")?;
+
+    // Now actually launch the SSH process.
 
     let child = process::Command::new("ssh")
         .arg("-N")
         .arg(&params.host)
         .env_remove("DISPLAY")
-        .slave_to_pty(&ptymaster).context("failed to set up PTY slave")?
-        .spawn().context("failed to launch SSH command")?;
+        .spawn_pty_async(&ptymaster, &handle).context("failed to launch SSH")?;
 
-    // To reap children properly, we need to log them here -- note that this
-    // is before we know if we've actually set up the SSH session fully.
+    // The task that will remember this child and wait around for it die.
 
-    shared.children.insert(params.host.clone(), Tunnel {
-        ssh: child,
-        ptymaster: ptymaster_dup,
+    tokio::spawn(ChildMonitor::start(
+        shared.clone(), params.host.clone(), child, rx_kill, tx_die
+    ));
+
+    // The kill channel gives us a way to control the process later. We hold
+    // on to the handles to the ptymaster and rx_die for now, because we care
+    // about them when completing the password entry stage of the daemon
+    // setup.
+
+    shared.lock().unwrap().children.insert(params.host.clone(), Tunnel {
+        tx_kill: tx_kill,
     });
 
-    Ok((ptymaster, ptymaster_dup2))
+    let (ptywrite, ptyread) = ptymaster.framed(BytesCodec::new()).split();
+    Ok((ptyread, ptywrite, rx_die))
 }
-
 
 
 struct Tunnel {
-    ssh: process::Child,
-
-    /// Needed to maintain the SSH daemon's PTY! Otherwise it SIGHUPs and dies
-    /// if it tries to do any output.
-    #[allow(unused)] ptymaster: fs::File,
+    tx_kill: Sender<()>,
 }
 
 
-/// This just duplicates what tokio-stdin does.
-pub fn spawn_monitor<R: 'static + Read + StdSend>(thing: R, buffer: usize) -> Receiver<u8> {
-    // TODO: we need to know when to quit! Or maybe we actually don't.
-    use futures::stream::iter_result;
-    use futures::sync::mpsc::{channel};
-    use std::thread;
+#[derive(StateMachineFuture)]
+#[allow(unused)] // get lots of these spuriously; custom derive stuff?
+enum ChildMonitor {
+    #[state_machine_future(start, transitions(NotifyingChildDied))]
+    AwaitingChildEvent {
+        shared: Arc<Mutex<State>>,
+        key: String,
+        child: Child,
+        rx_kill: Receiver<()>,
+        tx_die: Sender<Option<ExitStatus>>, // None if child was explicitly killed
+    },
 
-    let (channel_sink, channel_stream) = channel(buffer);
-    let reader_sink = channel_sink.sink_map_err(|e| Error::from(e));
+    #[state_machine_future(transitions(ChildReaped))]
+    NotifyingChildDied {
+        tx_die: Send<Sender<Option<ExitStatus>>>,
+    },
 
-    thread::spawn(move || {
-        let _r = iter_result(thing.bytes())
-            .map_err(|e| Error::from(e))
-            .forward(reader_sink)
-            .wait();
-    });
+    #[state_machine_future(ready)]
+    ChildReaped(()),
 
-    channel_stream
+    #[state_machine_future(error)]
+    ChildError(()),
+}
+
+impl PollChildMonitor for ChildMonitor {
+    fn poll_awaiting_child_event<'a>(
+        state: &'a mut RentToOwn<'a, AwaitingChildEvent>
+    ) -> Poll<AfterAwaitingChildEvent, ()> {
+        match state.child.poll() {
+            Err(_) => {
+                return Err(());
+            },
+
+            Ok(Async::Ready(status)) => {
+                // Child died! We no longer care about any kill messages, but
+                // we should let the server know what happened.
+                let mut state = state.take();
+                state.shared.lock().unwrap().children.remove(&state.key);
+                state.rx_kill.close();
+                transition!(NotifyingChildDied {
+                    tx_die: state.tx_die.send(Some(status)),
+                });
+            },
+
+            Ok(Async::NotReady) => {},
+        }
+
+        match state.rx_kill.poll() {
+            Err(_) => {
+                return Err(());
+            },
+
+            Ok(Async::Ready(_)) => {
+                // We've been told to kill the child.
+                let mut state = state.take();
+                let _r = state.child.kill(); // can't do anything if this fails
+                state.shared.lock().unwrap().children.remove(&state.key);
+                state.rx_kill.close();
+                transition!(NotifyingChildDied {
+                    tx_die: state.tx_die.send(None),
+                });
+            },
+
+            Ok(Async::NotReady) => {},
+        }
+
+        Ok(Async::NotReady)
+    }
+
+    fn poll_notifying_child_died<'a>(
+        state: &'a mut RentToOwn<'a, NotifyingChildDied>
+    ) -> Poll<AfterNotifyingChildDied, ()> {
+        match state.tx_die.poll() {
+            Err(_) => {
+                return Err(());
+            },
+
+            Ok(Async::Ready(_)) => {
+                transition!(ChildReaped(()));
+            },
+
+            Ok(Async::NotReady) => {
+                return Ok(Async::NotReady);
+            },
+        }
+    }
 }

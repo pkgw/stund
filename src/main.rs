@@ -5,14 +5,10 @@
 
 extern crate atty;
 extern crate bincode;
-extern crate byteorder;
-#[macro_use] extern crate chan;
-extern crate chan_signal;
 extern crate daemonize;
 #[macro_use] extern crate failure;
 #[macro_use] extern crate futures;
 extern crate libc;
-extern crate pseudotty;
 extern crate serde;
 extern crate serde_json;
 #[macro_use] extern crate serde_derive;
@@ -22,6 +18,7 @@ extern crate stund;
 extern crate tokio;
 extern crate tokio_core;
 extern crate tokio_io;
+extern crate tokio_pty_process;
 extern crate tokio_serde_json;
 extern crate tokio_signal;
 extern crate tokio_stdin;
@@ -33,7 +30,6 @@ use std::process;
 use structopt::StructOpt;
 
 mod daemon;
-mod olddaemon;
 mod new;
 
 
@@ -58,10 +54,7 @@ pub struct StundExitOptions {
 
 impl StundExitOptions {
     fn cli(self) -> Result<i32, Error> {
-        // Note that if the daemon isn't running this will be dumb and start
-        // it ...
-        let mut conn = olddaemon::DaemonConnection::new()?;
-        conn.send_message(&olddaemon::ClientMessage::Exit)?;
+        println!("TODO");
         Ok(0)
     }
 }
