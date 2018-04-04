@@ -18,15 +18,13 @@ use std::mem;
 use std::os::unix::io::AsRawFd;
 use std::path::PathBuf;
 use tokio_core::reactor::Core;
-use tokio_executor;
-use tokio_io::{AsyncRead, AsyncWrite};
+use tokio_io::AsyncRead;
 use tokio_io::codec::length_delimited::{FramedRead, FramedWrite};
 use tokio_io::io::{ReadHalf, WriteHalf};
 use tokio_serde_json::{ReadJson, WriteJson};
 use tokio_stdin;
 use tokio_uds::UnixStream;
 
-use stund::*;
 use stund::protocol::*;
 use super::StundOpenOptions;
 

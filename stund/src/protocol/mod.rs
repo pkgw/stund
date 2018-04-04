@@ -8,7 +8,6 @@ use std::env;
 use std::path::PathBuf;
 
 pub mod client;
-//pub mod server;
 
 
 pub fn get_socket_path() -> Result<PathBuf, Error> {

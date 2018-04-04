@@ -3,7 +3,6 @@
 
 //! Clients that talk to the daemon.
 
-use atty;
 use failure::Error;
 use futures::{Async, Future, Poll, Sink, Stream};
 use futures::future::Either;
@@ -12,11 +11,11 @@ use futures::stream::StreamFuture;
 use futures::sync::mpsc::Receiver;
 use libc;
 use state_machine_future::RentToOwn;
-use std::io::{self, Read, Write};
+use std::io::{self, Write};
 use std::mem;
 use std::os::unix::io::AsRawFd;
 use tokio_core::reactor::Core;
-use tokio_io::{AsyncRead, AsyncWrite};
+use tokio_io::AsyncRead;
 use tokio_io::codec::length_delimited::{FramedRead, FramedWrite};
 use tokio_io::io::{ReadHalf, WriteHalf};
 use tokio_serde_json::{ReadJson, WriteJson};
@@ -76,7 +75,7 @@ impl Connection {
     pub fn send_open(mut self, params: OpenParameters) -> Result<Self, Error> {
         let fut = self.ser.send(ClientMessage::Open(params));
         let result = self.core.run(OpenWorkflow::start(self.de, fut));
-        toggle_terminal_echo(true);
+        //toggle_terminal_echo(true);
         let (ser, de) = result?;
         println!("[Success]");
         self.ser = ser;
@@ -206,7 +205,7 @@ impl PollOpenWorkflow for OpenWorkflow {
         }
 
         println!("[Begin SSH login; type \".\" on an empty line when login has succeeded.]");
-        toggle_terminal_echo(false);
+        //toggle_terminal_echo(false);
 
         let stdin = tokio_stdin::spawn_stdin_stream_bounded(512);
 
@@ -432,29 +431,5 @@ impl PollOpenWorkflow for OpenWorkflow {
             state.transmission = transmission;
             transition!(state)
         }
-    }
-}
-
-
-fn toggle_terminal_echo(active: bool) {
-    if atty::isnt(atty::Stream::Stdout) {
-        return;
-    }
-
-    let mut attrs: libc::termios = unsafe { mem::zeroed() };
-
-    if unsafe { libc::tcgetattr(0, &mut attrs as _) } != 0 {
-        println!("error querying terminal attributes?!");
-        return;
-    }
-
-    if active {
-        attrs.c_lflag |= libc::ECHO;
-    } else {
-        attrs.c_lflag &= !libc::ECHO;
-    }
-
-    if unsafe { libc::tcsetattr(0, libc::TCSANOW, &attrs as _) } != 0 {
-        println!("error setting terminal attributes?!");
     }
 }

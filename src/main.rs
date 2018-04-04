@@ -4,26 +4,20 @@
 //! The main CLI driver logic.
 
 extern crate atty;
-extern crate bincode;
 extern crate daemonize;
 #[macro_use] extern crate failure;
 #[macro_use] extern crate futures;
 extern crate libc;
-extern crate serde;
-extern crate serde_json;
-#[macro_use] extern crate serde_derive;
 #[macro_use] extern crate state_machine_future;
 #[macro_use] extern crate structopt;
 extern crate stund;
 extern crate tokio_core;
-extern crate tokio_executor;
 extern crate tokio_io;
 extern crate tokio_pty_process;
 extern crate tokio_serde_json;
 extern crate tokio_signal;
 extern crate tokio_stdin;
 extern crate tokio_uds;
-extern crate unix_socket;
 
 use failure::Error;
 use std::process;
