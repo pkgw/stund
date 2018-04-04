@@ -5,17 +5,18 @@
 
 use atty;
 use failure::Error;
+use futures::{Async, Future, Poll, Sink, Stream};
 use futures::future::Either;
 use futures::sink::Send;
 use futures::stream::StreamFuture;
 use futures::sync::mpsc::Receiver;
 use libc;
 use state_machine_future::RentToOwn;
-use std::io;
+use std::io::{self, Read, Write};
 use std::mem;
 use std::os::unix::io::AsRawFd;
-use tokio::prelude::*;
 use tokio_core::reactor::Core;
+use tokio_io::{AsyncRead, AsyncWrite};
 use tokio_io::codec::length_delimited::{FramedRead, FramedWrite};
 use tokio_io::io::{ReadHalf, WriteHalf};
 use tokio_serde_json::{ReadJson, WriteJson};

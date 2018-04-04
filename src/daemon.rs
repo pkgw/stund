@@ -5,16 +5,18 @@
 
 use daemonize;
 use failure::{Error, ResultExt};
+use futures::{Async, Future, Poll, Sink, Stream};
 use futures::future::Either;
 use futures::sink::Send;
 use futures::stream::{SplitSink, SplitStream, StreamFuture};
 use futures::sync::mpsc::{channel, Receiver, Sender};
+use futures::sync::oneshot;
 use libc;
 use state_machine_future::RentToOwn;
 use std::collections::HashMap;
 use std::fmt;
 use std::fs;
-use std::io;
+use std::io::{self, Write};
 use std::marker::Send as StdSend;
 use std::mem;
 use std::os::unix::io::AsRawFd;
@@ -23,8 +25,9 @@ use std::path::PathBuf;
 use std::process::ExitStatus;
 use std::sync::{Arc, Mutex};
 use stund::protocol::*;
-use tokio::prelude::*;
 use tokio_core::reactor::{Core, Handle, Remote}; // TODO: tokio_core is deprecated
+use tokio_executor;
+use tokio_io::{AsyncRead, AsyncWrite};
 use tokio_io::codec::length_delimited::{FramedRead, FramedWrite};
 use tokio_io::codec::{BytesCodec, Framed};
 use tokio_io::io::{ReadHalf, WriteHalf};
@@ -59,6 +62,7 @@ pub struct State {
     sock_path: PathBuf,
     _opts: StundDaemonOptions,
     log: Box<Write + StdSend>,
+    tx_new_ssh: Option<Sender<(OpenParameters, TxFin)>>,
     children: HashMap<String, Tunnel>,
 }
 
@@ -107,6 +111,7 @@ impl State {
             sock_path: p,
             _opts: opts,
             log: log,
+            tx_new_ssh: None,
             children: HashMap::new(),
         })
     }
@@ -126,6 +131,12 @@ impl State {
         let listener = UnixListener::bind(&self.sock_path, &handle)?;
 
         log!(self, "starting up");
+
+        // Needed to command the creation of an SSH client
+
+        let (tx_new_ssh, rx_new_ssh) = channel(8);
+        self.tx_new_ssh = Some(tx_new_ssh);
+
         let shared = Arc::new(Mutex::new(self));
         let shared3 = shared.clone();
 
@@ -163,6 +174,58 @@ impl State {
             handle.spawn(fut);
         }
 
+        // As far as I can tell, in Tokio 0.1 we can only create new evented I/O thingies
+        // from this main thread, which means yet another custom task that listens for
+        // instructions to start new SSH processes.
+
+        let handle2 = handle.clone();
+        let shared2 = shared.clone();
+
+        let ssh_maker = rx_new_ssh.for_each(move |(params, tx_finished): (OpenParameters, TxFin)| {
+            // A channel that the server can use to tell the SSH monitor task to kill the
+            // process, and a channel that the monitor can use to tell us if SSH died.
+
+            println!("got command to spawn SSH for {}", params.host);
+
+            let (tx_kill, rx_kill) = oneshot::channel();
+            let (tx_die, rx_die) = channel(0);
+
+            let inner = || {
+                let ptymaster = AsyncPtyMaster::open(&handle2).context("failed to create PTY")?;
+
+                // Now actually launch the SSH process.
+
+                let child = process::Command::new("ssh")
+                    .arg("-N")
+                    .arg(&params.host)
+                    .env_remove("DISPLAY")
+                    .spawn_pty_async(&ptymaster, &handle2).context("failed to launch SSH")?;
+
+                // The task that will remember this child and wait around for it die.
+
+                handle2.spawn(ChildMonitor::start(
+                    shared2.clone(), params.host.clone(), child, rx_kill, tx_die
+                ));
+
+                // The kill channel gives us a way to control the process later. We hold
+                // on to the handles to the ptymaster and rx_die for now, because we care
+                // about them when completing the password entry stage of the daemon
+                // setup.
+
+                shared2.lock().unwrap().children.insert(params.host.clone(), Tunnel {
+                    tx_kill: tx_kill,
+                });
+
+                let (ptywrite, ptyread) = ptymaster.framed(BytesCodec::new()).split();
+                Ok(NewSshInfo { ptywrite: ptywrite, ptyread: ptyread, rx_die: rx_die })
+            };
+
+            tx_finished.send(inner());
+            Ok(())
+        });
+
+        handle.spawn(ssh_maker);
+
         // handling incoming connections -- normally this is the "main" task
         // of a server, but we have all sorts of cares and worries.
 
@@ -186,6 +249,116 @@ impl State {
     }
 }
 
+
+// Supporting jazz for the SSH-creation exchange
+
+struct NewSshInfo {
+    pub ptywrite: PtySink,
+    pub ptyread: PtyStream,
+    pub rx_die: Receiver<Option<ExitStatus>>,
+}
+
+
+type PtyStream = SplitStream<Framed<AsyncPtyMaster, BytesCodec>>;
+type PtySink = SplitSink<Framed<AsyncPtyMaster, BytesCodec>>;
+
+type TxFin = oneshot::Sender<Result<NewSshInfo, Error>>;
+
+struct Tunnel {
+    tx_kill: oneshot::Sender<()>,
+}
+
+
+#[derive(StateMachineFuture)]
+#[allow(unused)] // get lots of these spuriously; custom derive stuff?
+enum ChildMonitor {
+    #[state_machine_future(start, transitions(NotifyingChildDied))]
+    AwaitingChildEvent {
+        shared: Arc<Mutex<State>>,
+        key: String,
+        child: Child,
+        rx_kill: oneshot::Receiver<()>,
+        tx_die: Sender<Option<ExitStatus>>, // None if child was explicitly killed
+    },
+
+    #[state_machine_future(transitions(ChildReaped))]
+    NotifyingChildDied {
+        tx_die: Send<Sender<Option<ExitStatus>>>,
+    },
+
+    #[state_machine_future(ready)]
+    ChildReaped(()),
+
+    #[state_machine_future(error)]
+    ChildError(()),
+}
+
+impl PollChildMonitor for ChildMonitor {
+    fn poll_awaiting_child_event<'a>(
+        state: &'a mut RentToOwn<'a, AwaitingChildEvent>
+    ) -> Poll<AfterAwaitingChildEvent, ()> {
+        match state.child.poll() {
+            Err(_) => {
+                return Err(());
+            },
+
+            Ok(Async::Ready(status)) => {
+                // Child died! We no longer care about any kill messages, but
+                // we should let the server know what happened.
+                let mut state = state.take();
+                state.shared.lock().unwrap().children.remove(&state.key);
+                state.rx_kill.close();
+                transition!(NotifyingChildDied {
+                    tx_die: state.tx_die.send(Some(status)),
+                });
+            },
+
+            Ok(Async::NotReady) => {},
+        }
+
+        match state.rx_kill.poll() {
+            Err(_) => {
+                return Err(());
+            },
+
+            Ok(Async::Ready(_)) => {
+                // We've been told to kill the child.
+                let mut state = state.take();
+                let _r = state.child.kill(); // can't do anything if this fails
+                state.shared.lock().unwrap().children.remove(&state.key);
+                state.rx_kill.close();
+                transition!(NotifyingChildDied {
+                    tx_die: state.tx_die.send(None),
+                });
+            },
+
+            Ok(Async::NotReady) => {},
+        }
+
+        Ok(Async::NotReady)
+    }
+
+    fn poll_notifying_child_died<'a>(
+        state: &'a mut RentToOwn<'a, NotifyingChildDied>
+    ) -> Poll<AfterNotifyingChildDied, ()> {
+        match state.tx_die.poll() {
+            Err(_) => {
+                return Err(());
+            },
+
+            Ok(Async::Ready(_)) => {
+                transition!(ChildReaped(()));
+            },
+
+            Ok(Async::NotReady) => {
+                return Ok(Async::NotReady);
+            },
+        }
+    }
+}
+
+
+// Oh right we actually want to handle clients too
 
 fn process_client(socket: UnixStream, addr: SocketAddr, shared: Arc<Mutex<State>>) {
     // Without turning on linger, I find that the tokio-ized version loses
@@ -219,7 +392,7 @@ fn process_client(socket: UnixStream, addr: SocketAddr, shared: Arc<Mutex<State>
         log!(shared3.lock().unwrap(), "error from client session: {:?}", err);
     });
 
-    tokio::spawn(wrapped);
+    tokio_executor::spawn(wrapped);
 }
 
 
@@ -228,14 +401,44 @@ struct ClientCommonState {
     addr: SocketAddr,
 }
 
+impl ClientCommonState {
+    pub fn shared(&self) -> ::std::sync::MutexGuard<State> {
+        self.shared.lock().unwrap()
+    }
+}
+
 #[derive(StateMachineFuture)]
 #[allow(unused)] // get lots of these spuriously; custom derive stuff?
 enum Client {
-    #[state_machine_future(start, transitions(AwaitingCommand, CommunicatingForOpen, Finished, Aborting))]
+    #[state_machine_future(start, transitions(AwaitingCommand, StartSendSshSpawn, Finished, Aborting))]
     AwaitingCommand {
         common: ClientCommonState,
         tx: Ser,
         rx: StreamFuture<De>,
+    },
+
+    #[state_machine_future(transitions(PollSendSshSpawn))]
+    StartSendSshSpawn {
+        common: ClientCommonState,
+        params: OpenParameters,
+        cl_tx: Ser,
+        cl_rx: De,
+    },
+
+    #[state_machine_future(transitions(WaitingForSshSpawn))]
+    PollSendSshSpawn {
+        common: ClientCommonState,
+        rx_ssh_ready: oneshot::Receiver<Result<NewSshInfo, Error>>,
+        cl_tx: Ser,
+        cl_rx: De,
+    },
+
+    #[state_machine_future(transitions(Aborting, CommunicatingForOpen))]
+    WaitingForSshSpawn {
+        common: ClientCommonState,
+        rx_ssh_ready: oneshot::Receiver<Result<NewSshInfo, Error>>,
+        cl_tx: Ser,
+        cl_rx: De,
     },
 
     #[state_machine_future(transitions(Aborting, CommunicatingForOpen, FinalizingOpen))]
@@ -296,7 +499,16 @@ impl PollClient for Client {
             },
 
             Some(ClientMessage::Open(params)) => {
-                return handle_client_open(state.common, state.tx, de, params);
+                // In tokio 0.1, we have to do a dance because only the main
+                // thread can launch a new evented I/O thingie. First, start
+                // sending a message to the main thread telling it to launch
+                // an SSH process.
+                transition!(StartSendSshSpawn {
+                    common: state.common,
+                    params: params,
+                    cl_tx: state.tx,
+                    cl_rx: de,
+                });
             },
 
             Some(ClientMessage::Exit) => {
@@ -314,6 +526,82 @@ impl PollClient for Client {
         }
     }
 
+    /// Try to *start* sending a message to the main thread telling it to
+    /// start a new SSH process.
+    ///
+    /// (We have to use `start_send()` rather then `send()` since the latter
+    /// consumes the sink, which we can't do since it is a shared resource.)
+    fn poll_start_send_ssh_spawn<'a>(
+        state: &'a mut RentToOwn<'a, StartSendSshSpawn>
+    ) -> Poll<AfterStartSendSshSpawn, Error> {
+        println!("start send ssh spawn");
+        let (tx_ssh_ready, rx_ssh_ready) = oneshot::channel();
+        let mut state = state.take();
+        let r = { state.common.shared().tx_new_ssh.as_mut().unwrap().start_send((state.params, tx_ssh_ready))? };
+        match r {
+            futures::AsyncSink::Ready => {
+                // We successfully sent the command to start spawning SSH. Now
+                // we have to poll the channel to drive the send to completion.
+                transition!(PollSendSshSpawn {
+                    common: state.common,
+                    rx_ssh_ready: rx_ssh_ready,
+                    cl_tx: state.cl_tx,
+                    cl_rx: state.cl_rx,
+                });
+            },
+
+            futures::AsyncSink::NotReady((params, tx_ready)) => {
+                // Command not sent; we get our message back.
+                state.params = params;
+                return Ok(Async::NotReady);
+            },
+        }
+    }
+
+    /// We have successfully started sending the message to the main thread.
+    /// Now poll until it gets there.
+    fn poll_poll_send_ssh_spawn<'a>(
+        state: &'a mut RentToOwn<'a, PollSendSshSpawn>
+    ) -> Poll<AfterPollSendSshSpawn, Error> {
+        println!("poll send ssh spawn");
+        let state = state.take();
+        try_ready!(state.common.shared().tx_new_ssh.as_mut().unwrap().poll_complete());
+        // we finally sent the command; now we wait for the reply
+        transition!(WaitingForSshSpawn {
+            common: state.common,
+            rx_ssh_ready: state.rx_ssh_ready,
+            cl_tx: state.cl_tx,
+            cl_rx: state.cl_rx,
+        });
+    }
+
+    /// We have successfully told the main thread to start an SSH process. Now
+    /// poll until it tells us the outcome.
+    fn poll_waiting_for_ssh_spawn<'a>(
+        state: &'a mut RentToOwn<'a, WaitingForSshSpawn>
+    ) -> Poll<AfterWaitingForSshSpawn, Error> {
+        println!("poll waiting for ssh spawn");
+        let res = try_ready!(state.rx_ssh_ready.poll());
+        println!("transitioning to communication");
+        let new_ssh_info = res?;
+        let state = state.take();
+
+        transition!(CommunicatingForOpen {
+            common: state.common,
+            cl_tx: Either::B(state.cl_tx.send(ServerMessage::Ok)),
+            cl_rx: state.cl_rx.into_future(),
+            ssh_tx: new_ssh_info.ptywrite,
+            ssh_rx: new_ssh_info.ptyread.into_future(),
+            ssh_die: new_ssh_info.rx_die.into_future(),
+            buf: Vec::new(),
+            saw_end: false,
+        })
+    }
+
+    /// The main thread has successfully started SSH! Now we do some
+    /// uber-multiplexing to allow the client to communicate with the SSH
+    /// process interactively, while keeping tabs on whether SSH bites the
+    /// dust under us.
     fn poll_communicating_for_open<'a>(
         state: &'a mut RentToOwn<'a, CommunicatingForOpen>
     ) -> Poll<AfterCommunicatingForOpen, Error> {
@@ -438,6 +726,9 @@ impl PollClient for Client {
         transition!(state);
     }
 
+    /// OMG, we actually started SSH successfully. Once we make sure that the
+    /// client has received its success notification, we can go back to
+    /// waiting for its next command.
     fn poll_finalizing_open<'a>(
         state: &'a mut RentToOwn<'a, FinalizingOpen>
     ) -> Poll<AfterFinalizingOpen, Error> {
@@ -451,6 +742,12 @@ impl PollClient for Client {
         });
     }
 
+    /// Something has happened that forces us to send the client an error
+    /// message and terminate its connection. Make sure the message gets out.
+    /// (Note that we must *not* return Err states in our state machine here
+    /// because there is an important message that we must send to the client!
+    /// The error was in the actions the client asked us to take, but not in
+    /// the actual underlying handling of this connection.
     fn poll_aborting<'a>(
         state: &'a mut RentToOwn<'a, Aborting>
     ) -> Poll<AfterAborting, Error> {
@@ -529,174 +826,29 @@ fn abort_client<T: IntoEitherTx, R: IntoEitherRx>(
 }
 
 
-fn handle_client_open(
-    common: ClientCommonState, tx: Ser, rx: De, params: OpenParameters
-) -> Poll<AfterAwaitingCommand, Error> {
-    let result = handle_client_open_inner(common.shared.clone(), &params);
-
-    let (ptyread, ptywrite, rx_die) = match result {
-        Ok(m) => m,
-
-        Err(e) => { // We have to tell the client that something went wrong.
-            transition!(abort_client(common, tx, rx, format!("{}", e)));
-        }
-    };
-
-    let tx = tx.send(ServerMessage::Ok);
-
-    transition!(CommunicatingForOpen {
-        common: common,
-        cl_tx: Either::B(tx),
-        cl_rx: rx.into_future(),
-        ssh_tx: ptywrite,
-        ssh_rx: ptyread.into_future(),
-        ssh_die: rx_die.into_future(),
-        buf: Vec::new(),
-        saw_end: false,
-    });
-}
-
-type PtyStream = SplitStream<Framed<AsyncPtyMaster, BytesCodec>>;
-type PtySink = SplitSink<Framed<AsyncPtyMaster, BytesCodec>>;
-
-fn handle_client_open_inner(
-    shared: Arc<Mutex<State>>, params: &OpenParameters
-) -> Result<(PtyStream, PtySink, Receiver<Option<ExitStatus>>), Error> {
-    // A channel that the server can use to tell the SSH monitor task to kill the
-    // process, and a channel that the monitor can use to tell us if SSH died.
-
-    let (tx_kill, rx_kill) = channel(0);
-    let (tx_die, rx_die) = channel(0);
-
-    // Next, the PTY.
-
-    let handle = {
-        let x = shared.lock().unwrap();
-        let y = x.remote.as_ref().unwrap();
-        let z = y.handle().unwrap();
-        z
-    };
-    
-    //let handle = shared.lock().unwrap().remote.as_ref().unwrap().handle().unwrap(); // whee!
-    let ptymaster = AsyncPtyMaster::open(&handle).context("failed to create PTY")?;
-
-    // Now actually launch the SSH process.
-
-    let child = process::Command::new("ssh")
-        .arg("-N")
-        .arg(&params.host)
-        .env_remove("DISPLAY")
-        .spawn_pty_async(&ptymaster, &handle).context("failed to launch SSH")?;
-
-    // The task that will remember this child and wait around for it die.
-
-    tokio::spawn(ChildMonitor::start(
-        shared.clone(), params.host.clone(), child, rx_kill, tx_die
-    ));
-
-    // The kill channel gives us a way to control the process later. We hold
-    // on to the handles to the ptymaster and rx_die for now, because we care
-    // about them when completing the password entry stage of the daemon
-    // setup.
-
-    shared.lock().unwrap().children.insert(params.host.clone(), Tunnel {
-        tx_kill: tx_kill,
-    });
-
-    let (ptywrite, ptyread) = ptymaster.framed(BytesCodec::new()).split();
-    Ok((ptyread, ptywrite, rx_die))
-}
-
-
-struct Tunnel {
-    tx_kill: Sender<()>,
-}
-
-
-#[derive(StateMachineFuture)]
-#[allow(unused)] // get lots of these spuriously; custom derive stuff?
-enum ChildMonitor {
-    #[state_machine_future(start, transitions(NotifyingChildDied))]
-    AwaitingChildEvent {
-        shared: Arc<Mutex<State>>,
-        key: String,
-        child: Child,
-        rx_kill: Receiver<()>,
-        tx_die: Sender<Option<ExitStatus>>, // None if child was explicitly killed
-    },
-
-    #[state_machine_future(transitions(ChildReaped))]
-    NotifyingChildDied {
-        tx_die: Send<Sender<Option<ExitStatus>>>,
-    },
-
-    #[state_machine_future(ready)]
-    ChildReaped(()),
-
-    #[state_machine_future(error)]
-    ChildError(()),
-}
-
-impl PollChildMonitor for ChildMonitor {
-    fn poll_awaiting_child_event<'a>(
-        state: &'a mut RentToOwn<'a, AwaitingChildEvent>
-    ) -> Poll<AfterAwaitingChildEvent, ()> {
-        match state.child.poll() {
-            Err(_) => {
-                return Err(());
-            },
-
-            Ok(Async::Ready(status)) => {
-                // Child died! We no longer care about any kill messages, but
-                // we should let the server know what happened.
-                let mut state = state.take();
-                state.shared.lock().unwrap().children.remove(&state.key);
-                state.rx_kill.close();
-                transition!(NotifyingChildDied {
-                    tx_die: state.tx_die.send(Some(status)),
-                });
-            },
-
-            Ok(Async::NotReady) => {},
-        }
-
-        match state.rx_kill.poll() {
-            Err(_) => {
-                return Err(());
-            },
-
-            Ok(Async::Ready(_)) => {
-                // We've been told to kill the child.
-                let mut state = state.take();
-                let _r = state.child.kill(); // can't do anything if this fails
-                state.shared.lock().unwrap().children.remove(&state.key);
-                state.rx_kill.close();
-                transition!(NotifyingChildDied {
-                    tx_die: state.tx_die.send(None),
-                });
-            },
-
-            Ok(Async::NotReady) => {},
-        }
-
-        Ok(Async::NotReady)
-    }
-
-    fn poll_notifying_child_died<'a>(
-        state: &'a mut RentToOwn<'a, NotifyingChildDied>
-    ) -> Poll<AfterNotifyingChildDied, ()> {
-        match state.tx_die.poll() {
-            Err(_) => {
-                return Err(());
-            },
-
-            Ok(Async::Ready(_)) => {
-                transition!(ChildReaped(()));
-            },
-
-            Ok(Async::NotReady) => {
-                return Ok(Async::NotReady);
-            },
-        }
-    }
-}
+//fn handle_client_open(
+//    common: ClientCommonState, tx: Ser, rx: De, params: OpenParameters
+//) -> Poll<AfterAwaitingCommand, Error> {
+//    let result = handle_client_open_inner(common.shared.clone(), &params);
+//
+//    let (ptyread, ptywrite, rx_die) = match result {
+//        Ok(m) => m,
+//
+//        Err(e) => { // We have to tell the client that something went wrong.
+//            transition!(abort_client(common, tx, rx, format!("{}", e)));
+//        }
+//    };
+//
+//    let tx = tx.send(ServerMessage::Ok);
+//
+//    transition!(WaitingForSshSpawn {
+//        common: common,
+//        cl_tx: Either::B(tx),
+//        cl_rx: rx.into_future(),
+//        ssh_tx: ptywrite,
+//        ssh_rx: ptyread.into_future(),
+//        ssh_die: rx_die.into_future(),
+//        buf: Vec::new(),
+//        saw_end: false,
+//    });
+//}
