@@ -229,11 +229,11 @@ impl State {
         // handling incoming connections -- normally this is the "main" task
         // of a server, but we have all sorts of cares and worries.
 
-        //let tx_exit2 = tx_exit.clone();
+        let handle2 = handle.clone();
+        let tx_exit2 = tx_exit.clone();
 
         let server = listener.incoming().for_each(move |(socket, sockaddr)| {
-            //process_client(socket, sockaddr, shared.clone(), tx_exit2.clone());
-            process_client(socket, sockaddr, shared.clone());
+            process_client(&handle2, socket, sockaddr, shared.clone(), tx_exit2.clone());
             Ok(())
         }).map_err(move |err| {
             log!(shared3.lock().unwrap(), "accept error: {:?}", err);
@@ -306,6 +306,7 @@ impl PollChildMonitor for ChildMonitor {
                 // Child died! We no longer care about any kill messages, but
                 // we should let the server know what happened.
                 let mut state = state.take();
+                println!("child died womp womp");
                 state.shared.lock().unwrap().children.remove(&state.key);
                 state.rx_kill.close();
                 transition!(NotifyingChildDied {
@@ -360,7 +361,10 @@ impl PollChildMonitor for ChildMonitor {
 
 // Oh right we actually want to handle clients too
 
-fn process_client(socket: UnixStream, addr: SocketAddr, shared: Arc<Mutex<State>>) {
+fn process_client(
+    handle: &Handle, socket: UnixStream, addr: SocketAddr, shared: Arc<Mutex<State>>,
+    tx_exit: Sender<()>,
+) {
     // Without turning on linger, I find that the tokio-ized version loses
     // the last bytes of the session. Let's just ignore the return value
     // of setsockopt(), though.
@@ -382,6 +386,7 @@ fn process_client(socket: UnixStream, addr: SocketAddr, shared: Arc<Mutex<State>
     let shared3 = shared.clone();
 
     let common = ClientCommonState {
+        handle: handle.clone(),
         shared: shared,
         addr: addr,
     };
@@ -392,11 +397,12 @@ fn process_client(socket: UnixStream, addr: SocketAddr, shared: Arc<Mutex<State>
         log!(shared3.lock().unwrap(), "error from client session: {:?}", err);
     });
 
-    tokio_executor::spawn(wrapped);
+    handle.spawn(wrapped);
 }
 
 
 struct ClientCommonState {
+    handle: Handle,
     shared: Arc<Mutex<State>>,
     addr: SocketAddr,
 }
@@ -728,7 +734,8 @@ impl PollClient for Client {
 
         if state.saw_end {
             if let Either::A(ser) = cl_tx {
-                // XXX: stash handle to SSH pty
+                hand_off_ssh_process(&state.common.handle, state.common.shared.clone(),
+                                     ssh_tx, state.ssh_rx);
 
                 let send = ser.send(ServerMessage::Ok);
                 transition!(FinalizingOpen {
@@ -780,6 +787,27 @@ impl PollClient for Client {
             Err(format_err!("ending connection now that client has been notified"))
         }
     }
+}
+
+
+// A task for monitoring each SSH process's PTY once it has successfully
+// finished the password entry phase.
+
+fn hand_off_ssh_process(
+    handle: &Handle, shared: Arc<Mutex<State>>, ssh_tx: Either<PtySink, Send<PtySink>>,
+    ssh_rx: StreamFuture<PtyStream>
+) {
+    println!("handing off SSH process to monitor");
+    let shared2 = shared.clone();
+
+    let ssh_monitor = ssh_rx.into_inner().unwrap().for_each(move |bytes| {
+        log!(shared.lock().unwrap(), "SSH: {:?}", bytes);
+        Ok(())
+    }).map_err(move |err| {
+        log!(shared2.lock().unwrap(), "error polling SSH: {}", err);
+    });
+
+    handle.spawn(ssh_monitor);
 }
 
 
