@@ -446,10 +446,11 @@ enum Client {
         common: ClientCommonState,
         cl_tx: Either<Ser, Send<Ser>>,
         cl_rx: StreamFuture<De>,
-        ssh_tx: PtySink,
+        cl_buf: Vec<u8>,
+        ssh_tx: Either<PtySink, Send<PtySink>>,
         ssh_rx: StreamFuture<PtyStream>,
+        ssh_buf: Vec<u8>,
         ssh_die: StreamFuture<Receiver<Option<ExitStatus>>>,
-        buf: Vec<u8>,
         saw_end: bool,
     },
 
@@ -494,8 +495,8 @@ impl PollClient for Client {
 
         match msg {
             None => {
-                state.rx = de.into_future();
-                transition!(state);
+                // Stream ended. (= connection closed?)
+                transition!(Finished((state.common, state.tx, de)));
             },
 
             Some(ClientMessage::Open(params)) => {
@@ -559,7 +560,7 @@ impl PollClient for Client {
     }
 
     /// We have successfully started sending the message to the main thread.
-    /// Now poll until it gets there.
+    /// Now poll until the message gets there.
     fn poll_poll_send_ssh_spawn<'a>(
         state: &'a mut RentToOwn<'a, PollSendSshSpawn>
     ) -> Poll<AfterPollSendSshSpawn, Error> {
@@ -576,7 +577,9 @@ impl PollClient for Client {
     }
 
     /// We have successfully told the main thread to start an SSH process. Now
-    /// poll until it tells us the outcome.
+    /// poll until it tells us the outcome. If/when the SSH start succeeds,
+    /// notify the client that we are now ready for bidirectional
+    /// communication.
     fn poll_waiting_for_ssh_spawn<'a>(
         state: &'a mut RentToOwn<'a, WaitingForSshSpawn>
     ) -> Poll<AfterWaitingForSshSpawn, Error> {
@@ -590,10 +593,11 @@ impl PollClient for Client {
             common: state.common,
             cl_tx: Either::B(state.cl_tx.send(ServerMessage::Ok)),
             cl_rx: state.cl_rx.into_future(),
-            ssh_tx: new_ssh_info.ptywrite,
+            cl_buf: Vec::new(),
+            ssh_tx: Either::A(new_ssh_info.ptywrite),
             ssh_rx: new_ssh_info.ptyread.into_future(),
+            ssh_buf: Vec::new(),
             ssh_die: new_ssh_info.rx_die.into_future(),
-            buf: Vec::new(),
             saw_end: false,
         })
     }
@@ -622,12 +626,7 @@ impl PollClient for Client {
                             return Err(format_err!("client changed its mind about being finished"));
                         }
 
-                        println!("WRITE TO SSH");
-                        //if let Err(e) = state.ptymaster.write_all(&data) {
-                        //    let msg = format!("error writing to SSH process: {}", e);
-                        //    let mut state = state.take();
-                        //    transition!(abort_client(state.common, state.cl_tx, de, msg));
-                        //}
+                        state.ssh_buf.extend_from_slice(&data);
                     },
 
                     Some(ClientMessage::EndOfUserData) => {
@@ -669,7 +668,7 @@ impl PollClient for Client {
 
             if let Async::Ready((bytes, stdin)) = outcome {
                 if let Some(b) = bytes {
-                    state.buf.extend_from_slice(&b);
+                    state.cl_buf.extend_from_slice(&b);
                 }
 
                 Some(stdin)
@@ -684,9 +683,27 @@ impl PollClient for Client {
 
         let cl_tx = match state.cl_tx {
             Either::A(ser) => {
-                if state.buf.len() != 0 {
-                    let send = ser.send(ServerMessage::SshData(state.buf.clone()));
-                    state.buf.clear();
+                if state.cl_buf.len() != 0 {
+                    let send = ser.send(ServerMessage::SshData(state.cl_buf.clone()));
+                    state.cl_buf.clear();
+                    Either::B(send)
+                } else {
+                    Either::A(ser)
+                }
+            },
+
+            Either::B(mut send) => {
+                Either::A(try_ready!(send.poll()))
+            },
+        };
+
+        // Ready/able to send bytes to SSH?
+
+        let ssh_tx = match state.ssh_tx {
+            Either::A(ser) => {
+                if state.ssh_buf.len() != 0 {
+                    let send = ser.send(state.ssh_buf.clone().into());
+                    state.ssh_buf.clear();
                     Either::B(send)
                 } else {
                     Either::A(ser)
@@ -723,6 +740,7 @@ impl PollClient for Client {
         }
 
         state.cl_tx = cl_tx;
+        state.ssh_tx = ssh_tx;
         transition!(state);
     }
 
@@ -824,31 +842,3 @@ fn abort_client<T: IntoEitherTx, R: IntoEitherRx>(
         message: msg,
     }
 }
-
-
-//fn handle_client_open(
-//    common: ClientCommonState, tx: Ser, rx: De, params: OpenParameters
-//) -> Poll<AfterAwaitingCommand, Error> {
-//    let result = handle_client_open_inner(common.shared.clone(), &params);
-//
-//    let (ptyread, ptywrite, rx_die) = match result {
-//        Ok(m) => m,
-//
-//        Err(e) => { // We have to tell the client that something went wrong.
-//            transition!(abort_client(common, tx, rx, format!("{}", e)));
-//        }
-//    };
-//
-//    let tx = tx.send(ServerMessage::Ok);
-//
-//    transition!(WaitingForSshSpawn {
-//        common: common,
-//        cl_tx: Either::B(tx),
-//        cl_rx: rx.into_future(),
-//        ssh_tx: ptywrite,
-//        ssh_rx: ptyread.into_future(),
-//        ssh_die: rx_die.into_future(),
-//        buf: Vec::new(),
-//        saw_end: false,
-//    });
-//}
