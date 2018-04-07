@@ -58,7 +58,6 @@ pub struct State {
     sock_path: PathBuf,
     _opts: StundDaemonOptions,
     log: Box<Write + StdSend>,
-    tx_new_ssh: Option<mpsc::Sender<(OpenParameters, TxFin)>>,
     children: HashMap<String, Tunnel>,
 }
 
@@ -106,7 +105,6 @@ impl State {
             sock_path: p,
             _opts: opts,
             log: log,
-            tx_new_ssh: None,
             children: HashMap::new(),
         })
     }
@@ -127,9 +125,6 @@ impl State {
         log!(self, "starting up");
 
         // Needed to command the creation of an SSH client
-
-        let (tx_new_ssh, rx_new_ssh) = mpsc::channel(8);
-        self.tx_new_ssh = Some(tx_new_ssh);
 
         let shared = Arc::new(Mutex::new(self));
         let shared3 = shared.clone();
@@ -168,58 +163,6 @@ impl State {
             handle.spawn(fut);
         }
 
-        // As far as I can tell, in Tokio 0.1 we can only create new evented I/O thingies
-        // from this main thread, which means yet another custom task that listens for
-        // instructions to start new SSH processes.
-
-        let handle2 = handle.clone();
-        let shared2 = shared.clone();
-
-        let ssh_maker = rx_new_ssh.for_each(move |(params, tx_finished): (OpenParameters, TxFin)| {
-            // A channel that the server can use to tell the SSH monitor task to kill the
-            // process, and a channel that the monitor can use to tell us if SSH died.
-
-            //println!("got command to spawn SSH for {}", params.host);
-
-            let (tx_kill, rx_kill) = oneshot::channel();
-            let (tx_die, rx_die) = mpsc::channel(0);
-
-            let inner = || {
-                let ptymaster = AsyncPtyMaster::open(&handle2).context("failed to create PTY")?;
-
-                // Now actually launch the SSH process.
-
-                let child = process::Command::new("ssh")
-                    .arg(&params.host)
-                    .arg("echo \"[Login completed successfully.]\" && tail -f /dev/null")
-                    .env_remove("DISPLAY")
-                    .spawn_pty_async(&ptymaster, &handle2).context("failed to launch SSH")?;
-
-                // The task that will remember this child and wait around for it die.
-
-                handle2.spawn(ChildMonitor::start(
-                    shared2.clone(), params.host.clone(), child, rx_kill, tx_die
-                ));
-
-                // The kill channel gives us a way to control the process later. We hold
-                // on to the handles to the ptymaster and rx_die for now, because we care
-                // about them when completing the password entry stage of the daemon
-                // setup.
-
-                shared2.lock().unwrap().children.insert(params.host.clone(), Tunnel {
-                    _tx_kill: tx_kill,
-                });
-
-                let (ptywrite, ptyread) = ptymaster.framed(BytesCodec::new()).split();
-                Ok(NewSshInfo { ptywrite: ptywrite, ptyread: ptyread, rx_die: rx_die })
-            };
-
-            let _r = tx_finished.send(inner()); // can't use this under current model
-            Ok(())
-        });
-
-        handle.spawn(ssh_maker);
-
         // handling incoming connections -- normally this is the "main" task
         // of a server, but we have all sorts of cares and worries.
 
@@ -244,19 +187,10 @@ impl State {
 }
 
 
-// Supporting jazz for the SSH-creation exchange
-
-struct NewSshInfo {
-    pub ptywrite: PtySink,
-    pub ptyread: PtyStream,
-    pub rx_die: mpsc::Receiver<Option<ExitStatus>>,
-}
-
+// Supporting jazz for managing SSH processes
 
 type PtyStream = SplitStream<Framed<AsyncPtyMaster, BytesCodec>>;
 type PtySink = SplitSink<Framed<AsyncPtyMaster, BytesCodec>>;
-
-type TxFin = oneshot::Sender<Result<NewSshInfo, Error>>;
 
 struct Tunnel {
     _tx_kill: oneshot::Sender<()>,
@@ -412,35 +346,11 @@ impl ClientCommonState {
 #[derive(StateMachineFuture)]
 #[allow(unused)] // get lots of these spuriously; custom derive stuff?
 enum Client {
-    #[state_machine_future(start, transitions(AwaitingCommand, StartSendSshSpawn, Finished, Aborting))]
+    #[state_machine_future(start, transitions(CommunicatingForOpen, Finished, Aborting))]
     AwaitingCommand {
         common: ClientCommonState,
         tx: Ser,
         rx: De,
-    },
-
-    #[state_machine_future(transitions(PollSendSshSpawn))]
-    StartSendSshSpawn {
-        common: ClientCommonState,
-        params: OpenParameters,
-        cl_tx: Ser,
-        cl_rx: De,
-    },
-
-    #[state_machine_future(transitions(WaitingForSshSpawn))]
-    PollSendSshSpawn {
-        common: ClientCommonState,
-        rx_ssh_ready: oneshot::Receiver<Result<NewSshInfo, Error>>,
-        cl_tx: Ser,
-        cl_rx: De,
-    },
-
-    #[state_machine_future(transitions(Aborting, CommunicatingForOpen))]
-    WaitingForSshSpawn {
-        common: ClientCommonState,
-        rx_ssh_ready: oneshot::Receiver<Result<NewSshInfo, Error>>,
-        cl_tx: Ser,
-        cl_rx: De,
     },
 
     #[state_machine_future(transitions(Aborting, CommunicatingForOpen, FinalizingOpen))]
@@ -493,16 +403,7 @@ impl PollClient for Client {
             },
 
             Some(ClientMessage::Open(params)) => {
-                // In tokio 0.1, we have to do a dance because only the main
-                // thread can launch a new evented I/O thingie. First, start
-                // sending a message to the main thread telling it to launch
-                // an SSH process.
-                transition!(StartSendSshSpawn {
-                    common: state.common,
-                    params: params,
-                    cl_tx: state.tx,
-                    cl_rx: state.rx,
-                });
+                return handle_open_command(state.common, params, state.tx, state.rx);
             },
 
             Some(ClientMessage::Exit) => {
@@ -518,86 +419,6 @@ impl PollClient for Client {
                 return Err(format_err!("unexpected message from client: {:?}", other));
             },
         }
-    }
-
-    /// Try to *start* sending a message to the main thread telling it to
-    /// start a new SSH process.
-    ///
-    /// (We have to use `start_send()` rather then `send()` since the latter
-    /// consumes the sink, which we can't do since it is a shared resource.)
-    fn poll_start_send_ssh_spawn<'a>(
-        state: &'a mut RentToOwn<'a, StartSendSshSpawn>
-    ) -> Poll<AfterStartSendSshSpawn, Error> {
-        //println!("start send ssh spawn");
-        let (tx_ssh_ready, rx_ssh_ready) = oneshot::channel();
-        let mut state = state.take();
-        let r = { state.common.shared().tx_new_ssh.as_mut().unwrap().start_send((state.params, tx_ssh_ready))? };
-        match r {
-            futures::AsyncSink::Ready => {
-                // We successfully sent the command to start spawning SSH. Now
-                // we have to poll the channel to drive the send to completion.
-                transition!(PollSendSshSpawn {
-                    common: state.common,
-                    rx_ssh_ready: rx_ssh_ready,
-                    cl_tx: state.cl_tx,
-                    cl_rx: state.cl_rx,
-                });
-            },
-
-            futures::AsyncSink::NotReady((params, _tx_ready)) => {
-                // Command not sent; we get our message back.
-                state.params = params;
-                return Ok(Async::NotReady);
-            },
-        }
-    }
-
-    /// We have successfully started sending the message to the main thread.
-    /// Now poll until the message gets there.
-    fn poll_poll_send_ssh_spawn<'a>(
-        state: &'a mut RentToOwn<'a, PollSendSshSpawn>
-    ) -> Poll<AfterPollSendSshSpawn, Error> {
-        //println!("poll send ssh spawn");
-        let state = state.take();
-        try_ready!(state.common.shared().tx_new_ssh.as_mut().unwrap().poll_complete());
-        // we finally sent the command; now we wait for the reply
-        transition!(WaitingForSshSpawn {
-            common: state.common,
-            rx_ssh_ready: state.rx_ssh_ready,
-            cl_tx: state.cl_tx,
-            cl_rx: state.cl_rx,
-        });
-    }
-
-    /// We have successfully told the main thread to start an SSH process. Now
-    /// poll until it tells us the outcome. If/when the SSH start succeeds,
-    /// notify the client that we are now ready for bidirectional
-    /// communication.
-    fn poll_waiting_for_ssh_spawn<'a>(
-        state: &'a mut RentToOwn<'a, WaitingForSshSpawn>
-    ) -> Poll<AfterWaitingForSshSpawn, Error> {
-        //println!("poll waiting for ssh spawn");
-        let res = try_ready!(state.rx_ssh_ready.poll());
-        //println!("transitioning to communication");
-        let new_ssh_info = res?;
-        let mut state = state.take();
-
-        if let Ok(AsyncSink::Ready) = state.cl_tx.start_send(ServerMessage::Ok) {
-        } else {
-            panic!("cmon");
-        }
-
-        transition!(CommunicatingForOpen {
-            common: state.common,
-            cl_tx: state.cl_tx,
-            cl_rx: state.cl_rx,
-            cl_buf: Vec::new(),
-            ssh_tx: new_ssh_info.ptywrite,
-            ssh_rx: new_ssh_info.ptyread,
-            ssh_buf: Vec::new(),
-            ssh_die: new_ssh_info.rx_die.into_future(),
-            saw_end: false,
-        })
     }
 
     /// The main thread has successfully started SSH! Now we do some
@@ -747,6 +568,71 @@ impl PollClient for Client {
     }
 }
 
+fn handle_open_command(
+    common: ClientCommonState, params: OpenParameters, mut tx: Ser, rx: De
+) -> Poll<AfterAwaitingCommand, Error> {
+    log!(common.shared(), "got command to spawn SSH for {}", params.host);
+
+    let (tx_die, rx_die) = mpsc::channel(0);
+
+    fn inner(
+        common: &ClientCommonState, params: &OpenParameters, tx_die: mpsc::Sender<Option<ExitStatus>>
+    ) -> Result<Framed<AsyncPtyMaster, BytesCodec>, Error> {
+        let (tx_kill, rx_kill) = oneshot::channel();
+        let ptymaster = AsyncPtyMaster::open(&common.handle).context("failed to create PTY")?;
+
+        let child = process::Command::new("ssh")
+            .arg(&params.host)
+            .arg("echo \"[Login completed successfully.]\" && exec tail -f /dev/null")
+            .env_remove("DISPLAY")
+            .spawn_pty_async(&ptymaster, &common.handle).context("failed to launch SSH")?;
+
+        // The task that will remember this child and wait around for it die.
+
+        common.handle.spawn(ChildMonitor::start(
+            common.shared.clone(), params.host.clone(), child, rx_kill, tx_die
+        ));
+
+        // The kill channel gives us a way to control the process later. We hold
+        // on to the handles to the ptymaster and rx_die for now, because we care
+        // about them when completing the password entry stage of the daemon
+        // setup.
+
+        common.shared().children.insert(params.host.clone(), Tunnel {
+            _tx_kill: tx_kill,
+        });
+
+        Ok(ptymaster.framed(BytesCodec::new()))
+    }
+
+    match inner(&common, &params, tx_die) {
+        Ok(ptymaster) => {
+            let (ptywrite, ptyread) = ptymaster.split();
+
+            if let Ok(AsyncSink::Ready) = tx.start_send(ServerMessage::Ok) {
+            } else {
+                panic!("cmon");
+            }
+
+            transition!(CommunicatingForOpen {
+                common: common,
+                cl_tx: tx,
+                cl_rx: rx,
+                cl_buf: Vec::new(),
+                ssh_tx: ptywrite,
+                ssh_rx: ptyread,
+                ssh_buf: Vec::new(),
+                ssh_die: rx_die.into_future(),
+                saw_end: false,
+            });
+        },
+
+        Err(e) => {
+            let msg = format!("failed to launch SSH: {}", e);
+            transition!(abort_client(common, tx, rx, msg));
+        }
+    }
+}
 
 // A task for monitoring each SSH process's PTY once it has successfully
 // finished the password entry phase.
