@@ -3,6 +3,7 @@
 
 //! The daemon itself.
 
+use base64;
 use daemonize;
 use failure::{Error, ResultExt};
 use futures::{Async, AsyncSink, Future, Poll, Sink, Stream};
@@ -11,6 +12,7 @@ use futures::sink::Send;
 use futures::stream::{SplitSink, SplitStream, StreamFuture};
 use futures::sync::{mpsc, oneshot};
 use libc;
+use rand::{self, Rng};
 use state_machine_future::RentToOwn;
 use std::collections::HashMap;
 use std::fmt;
@@ -362,8 +364,9 @@ enum Client {
         ssh_tx: PtySink,
         ssh_rx: PtyStream,
         ssh_buf: Vec<u8>,
+        ssh_key: Vec<u8>,
+        ssh_key_status: SshKeyStatus,
         ssh_die: StreamFuture<mpsc::Receiver<Option<ExitStatus>>>,
-        saw_end: bool,
     },
 
     #[state_machine_future(transitions(AwaitingCommand))]
@@ -388,6 +391,14 @@ enum Client {
     Failed(Error),
 }
 
+/// This is not a "key" like in SSH public key cryptography, but a randomized
+/// marker that is printed on the remote host when the login process is
+/// completed. We search SSH's output to find this key.
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+enum SshKeyStatus {
+    Searching(usize),
+    FoundIt,
+}
 
 impl PollClient for Client {
     fn poll_awaiting_command<'a>(
@@ -403,7 +414,7 @@ impl PollClient for Client {
             },
 
             Some(ClientMessage::Open(params)) => {
-                return handle_open_command(state.common, params, state.tx, state.rx);
+                return process_open_command(state.common, params, state.tx, state.rx);
             },
 
             Some(ClientMessage::Exit) => {
@@ -433,15 +444,7 @@ impl PollClient for Client {
         while let Async::Ready(msg) = state.cl_rx.poll()? {
             match msg {
                 Some(ClientMessage::UserData(data)) => {
-                    if state.saw_end {
-                        return Err(format_err!("client changed its mind about being finished"));
-                    }
-
                     state.ssh_buf.extend_from_slice(&data);
-                },
-
-                Some(ClientMessage::EndOfUserData) => {
-                    state.saw_end = true;
                 },
 
                 Some(other) => {
@@ -473,8 +476,39 @@ impl PollClient for Client {
                 Async::NotReady => break,
 
                 Async::Ready(maybe_bytes) => {
-                    if let Some(b) = maybe_bytes {
-                        state.cl_buf.extend_from_slice(&b);
+                    if let Some(bytes) = maybe_bytes {
+                        // We need to search SSH's output for the "key" that
+                        // we use to figure out that login has completed
+                        // successfully.
+                        //
+                        // If we were cleverer we would not show the "key"
+                        // text to the client, but I don't want to figure out
+                        // the right state machine magic to ensure that output
+                        // is eventually showed in the event of an incomplete
+                        // match.
+                        if let SshKeyStatus::Searching(next_idx) = state.ssh_key_status {
+                            let mut n = next_idx;
+
+                            for b in &bytes {
+                                if b == state.ssh_key[n] {
+                                    n += 1;
+
+                                    if n == state.ssh_key.len() {
+                                        break;
+                                    }
+                                } else {
+                                    n = 0;
+                                }
+                            }
+
+                            if n == state.ssh_key.len() {
+                                state.ssh_key_status = SshKeyStatus::FoundIt;
+                            } else {
+                                state.ssh_key_status = SshKeyStatus::Searching(n);
+                            }
+                        }
+
+                        state.cl_buf.extend_from_slice(&bytes);
                     } else  {
                         // EOF from SSH -- it has probably died.
                         let msg = format!("unexpected EOF from SSH (program died?)");
@@ -510,10 +544,9 @@ impl PollClient for Client {
         try_ready!(state.cl_tx.poll_complete());
         try_ready!(state.ssh_tx.poll_complete());
 
-        // What's next? Even if we're finished, we can't transition to the
-        // next state until we're ready to send the OK message.
+        // What's next?
 
-        if state.saw_end {
+        if let SshKeyStatus::FoundIt = state.ssh_key_status {
             let state = state.take();
 
             hand_off_ssh_process(&state.common.handle, state.common.shared.clone(),
@@ -568,7 +601,7 @@ impl PollClient for Client {
     }
 }
 
-fn handle_open_command(
+fn process_open_command(
     common: ClientCommonState, params: OpenParameters, mut tx: Ser, rx: De
 ) -> Poll<AfterAwaitingCommand, Error> {
     log!(common.shared(), "got command to spawn SSH for {}", params.host);
@@ -579,17 +612,28 @@ fn handle_open_command(
         transition!(FinalizingTxn { common, tx: send, rx });
     }
 
+    // Generate a magic bit of text that we'll use to recognize when the
+    // login has succeeded.
+
+    let mut rng = rand::thread_rng();
+    let mut buf = [0u8; 32];
+    rng.fill_bytes(&mut buf);
+    let key = format!("STUND:{}", base64::encode(&buf));
+
+    // Let's launch the process.
+
     let (tx_die, rx_die) = mpsc::channel(0);
 
     fn inner(
-        common: &ClientCommonState, params: &OpenParameters, tx_die: mpsc::Sender<Option<ExitStatus>>
+        common: &ClientCommonState, params: &OpenParameters,
+        tx_die: mpsc::Sender<Option<ExitStatus>>, key: &str
     ) -> Result<Framed<AsyncPtyMaster, BytesCodec>, Error> {
         let (tx_kill, rx_kill) = oneshot::channel();
         let ptymaster = AsyncPtyMaster::open(&common.handle).context("failed to create PTY")?;
 
         let child = process::Command::new("ssh")
             .arg(&params.host)
-            .arg("echo \"[Login completed successfully.]\" && exec tail -f /dev/null")
+            .arg(format!("echo \"{}\" && exec tail -f /dev/null", key))
             .env_remove("DISPLAY")
             .spawn_pty_async(&ptymaster, &common.handle).context("failed to launch SSH")?;
 
@@ -611,7 +655,7 @@ fn handle_open_command(
         Ok(ptymaster.framed(BytesCodec::new()))
     }
 
-    match inner(&common, &params, tx_die) {
+    match inner(&common, &params, tx_die, &key) {
         Ok(ptymaster) => {
             let (ptywrite, ptyread) = ptymaster.split();
 
@@ -628,8 +672,9 @@ fn handle_open_command(
                 ssh_tx: ptywrite,
                 ssh_rx: ptyread,
                 ssh_buf: Vec::new(),
+                ssh_key: key.into_bytes(),
+                ssh_key_status: SshKeyStatus::Searching(0),
                 ssh_die: rx_die.into_future(),
-                saw_end: false,
             });
         },
 

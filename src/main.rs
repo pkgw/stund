@@ -4,10 +4,12 @@
 //! The main CLI driver logic.
 
 extern crate atty;
+extern crate base64;
 extern crate daemonize;
 #[macro_use] extern crate failure;
 #[macro_use] extern crate futures;
 extern crate libc;
+extern crate rand;
 #[macro_use] extern crate state_machine_future;
 #[macro_use] extern crate structopt;
 extern crate stund_protocol;
@@ -76,10 +78,6 @@ impl StundOpenOptions {
 
         let conn = Connection::establish(true)?;
 
-        if !self.quiet {
-            println!("[Log in and type \".\" on its own line when finished.]");
-        }
-
         toggle_terminal_echo(false);
         let r = tokio_borrow_stdio::borrow_stdio(|stdin, stdout| {
             conn.send_open(params, Box::new(stdout), Box::new(stdin))
@@ -89,10 +87,18 @@ impl StundOpenOptions {
 
         let (result, conn) = r?;
 
-        if let OpenResult::AlreadyOpen = result {
-            if !self.quiet {
-                println!("[Tunnel is already open.]");
-            }
+        match result {
+            OpenResult::Success => {
+                if !self.quiet {
+                    println!("[Tunnel successfully opened.]");
+                }
+            },
+
+            OpenResult::AlreadyOpen => {
+                if !self.quiet {
+                    println!("[Tunnel is already open.]");
+                }
+            },
         }
 
         conn.close()?;

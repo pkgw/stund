@@ -7,10 +7,12 @@ authors = ["Peter Williams <peter@newton.cx>"]
 
 [dependencies]
 atty = "0.2"
+base64 = "0.9"
 daemonize = "0.2"
 failure = "0.1"
 futures = "0.1"
 libc = "0.2"
+rand = "0.4"
 state_machine_future = "0.1"
 structopt = "0.2"
 stund_protocol = { path = "protocol", version = "0.1.0" }

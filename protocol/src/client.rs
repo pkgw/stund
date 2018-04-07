@@ -134,7 +134,7 @@ enum OpenWorkflow {
         saw_ok: bool,
     },
 
-    #[state_machine_future(transitions(CleaningUpIo))]
+    #[state_machine_future(transitions(Finished))]
     Communicating {
         tx_ssh: Ser,
         rx_ssh: De,
@@ -142,15 +142,6 @@ enum OpenWorkflow {
         tx_user: UserOutputSink,
         rx_user: UserInputStream,
         user_buf: Vec<u8>,
-        finished: FinishCommunicationState,
-    },
-
-    #[state_machine_future(transitions(CleaningUpIo, Finished))]
-    CleaningUpIo {
-        tx_ssh: Ser,
-        rx_ssh: De,
-        sent_finished_message: bool,
-        saw_ok: bool,
     },
 
     #[state_machine_future(ready)]
@@ -158,45 +149,6 @@ enum OpenWorkflow {
 
     #[state_machine_future(error)]
     Failed(Error),
-}
-
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum FinishCommunicationState {
-    NoLeads,
-    SawFirstEnter,
-    SawPeriod,
-    SawSecondEnter,
-}
-
-impl FinishCommunicationState {
-    pub fn transition(&self, byte: u8) -> Self {
-        match *self {
-            FinishCommunicationState::NoLeads => {
-                if byte == 0x0A {
-                    return FinishCommunicationState::SawFirstEnter;
-                }
-            },
-
-            FinishCommunicationState::SawFirstEnter => {
-                if byte == 0x2E {
-                    return FinishCommunicationState::SawPeriod;
-                }
-            },
-
-            FinishCommunicationState::SawPeriod => {
-                if byte == 0x0A {
-                    return FinishCommunicationState::SawSecondEnter;
-                }
-            },
-
-            FinishCommunicationState::SawSecondEnter => {
-                return FinishCommunicationState::SawSecondEnter;
-            },
-        }
-
-        FinishCommunicationState::NoLeads
-    }
 }
 
 
@@ -251,7 +203,6 @@ impl PollOpenWorkflow for OpenWorkflow {
                 rx_user: state.rx_user,
                 tx_user: state.tx_user,
                 user_buf: Vec::new(),
-                finished: FinishCommunicationState::SawFirstEnter,
                 tx_ssh: state.tx_ssh,
                 rx_ssh: state.rx_ssh,
                 ssh_buf: Vec::new(),
@@ -264,12 +215,18 @@ impl PollOpenWorkflow for OpenWorkflow {
     fn poll_communicating<'a>(
         state: &'a mut RentToOwn<'a, Communicating>
     ) -> Poll<AfterCommunicating, Error> {
-        // New text from the daemon?
+        // News from the daemon?
 
         while let Async::Ready(msg) = state.rx_ssh.poll()? {
             match msg {
                 Some(ServerMessage::SshData(data)) => {
                     state.user_buf.extend_from_slice(&data);
+                },
+
+                Some(ServerMessage::Ok) => {
+                    // All done!
+                    let mut state = state.take();
+                    transition!(Finished((state.tx_ssh, state.rx_ssh, OpenResult::Success)));
                 },
 
                 Some(ServerMessage::Error(e)) => {
@@ -294,10 +251,6 @@ impl PollOpenWorkflow for OpenWorkflow {
 
                 Some(b) => {
                     state.ssh_buf.extend_from_slice(&b);
-
-                    for single_byte in &b {
-                        state.finished = state.finished.transition(*single_byte);
-                    }
                 }
             }
         }
@@ -326,62 +279,6 @@ impl PollOpenWorkflow for OpenWorkflow {
 
         try_ready!(state.tx_user.poll_complete());
         try_ready!(state.tx_ssh.poll_complete());
-
-        // Next step?
-
-        if let FinishCommunicationState::SawSecondEnter = state.finished {
-            let mut state = state.take();
-            transition!(CleaningUpIo {
-                tx_ssh: state.tx_ssh,
-                rx_ssh: state.rx_ssh,
-                sent_finished_message: false,
-                saw_ok: false,
-            })
-        }
-
-        Ok(Async::NotReady)
-    }
-
-    fn poll_cleaning_up_io<'a>(
-        state: &'a mut RentToOwn<'a, CleaningUpIo>
-    ) -> Poll<AfterCleaningUpIo, Error> {
-        if !state.sent_finished_message {
-            if let AsyncSink::Ready = state.tx_ssh.start_send(ClientMessage::EndOfUserData)? {
-                state.sent_finished_message = true;
-            }
-        }
-
-        try_ready!(state.tx_ssh.poll_complete());
-
-        while let Async::Ready(msg) = state.rx_ssh.poll()? {
-            match msg {
-                Some(ServerMessage::SshData(_data)) => {
-                    eprintln!("warning: ignored some trailing SSH output");
-                },
-
-                Some(ServerMessage::Error(e)) => {
-                    return Err(format_err!("{}", e));
-                }
-
-                Some(ServerMessage::Ok) => {
-                    state.saw_ok = true;
-                }
-
-                Some(other) => {
-                    return Err(format_err!("unexpected message from the daemon: {:?}", other));
-                },
-
-                None => {},
-            }
-        }
-
-        // What's next?
-
-        if state.saw_ok {
-            let state = state.take();
-            transition!(Finished((state.tx_ssh, state.rx_ssh, OpenResult::Success)))
-        }
-
         Ok(Async::NotReady)
     }
 }

@@ -38,9 +38,6 @@ pub enum ClientMessage {
     /// User input to be sent to SSH
     UserData(Vec<u8>),
 
-    /// User input has concluded.
-    EndOfUserData,
-
     /// Tell the daemon to exit
     Exit,
 
