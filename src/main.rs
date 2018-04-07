@@ -72,18 +72,18 @@ impl StundOpenOptions {
     fn cli(self) -> Result<i32, Error> {
         let params = OpenParameters { host: self.host.clone() };
 
-        eprintln!("estab");
         let mut conn = Connection::establish()?;
 
+        println!("[Log in and type \".\" on its own line when finished.]");
+
         conn = tokio_borrow_stdio::borrow_stdio(|stdin, stdout| {
-            eprintln!("inner");
             conn.send_open(params, Box::new(stdout), Box::new(stdin))
                 .map_err(|_| io::ErrorKind::Other.into())
         })?;
 
-        eprintln!("done");
-        conn.close()?;
+        println!("[Success!]");
 
+        conn.close()?;
         Ok(0)
     }
 }

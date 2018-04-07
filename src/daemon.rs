@@ -638,7 +638,9 @@ impl PollClient for Client {
                     return Err(format_err!("unexpected message from the client: {:?}", other));
                 },
 
-                None => {},
+                None => {
+                    return Err(format_err!("client connection unexpectedly closed"));
+                },
             }
         }
 

@@ -109,9 +109,10 @@ enum OpenWorkflow {
     #[state_machine_future(transitions(FirstAck, Communicating))]
     FirstAck {
         tx_ssh: Ser,
-        rx_ssh: StreamFuture<De>,
+        rx_ssh: De,
         tx_user: UserOutputSink,
         rx_user: UserInputStream,
+        saw_ok: bool,
     },
 
     #[state_machine_future(transitions(CleaningUpIo))]
@@ -191,52 +192,51 @@ impl PollOpenWorkflow for OpenWorkflow {
         let state = state.take();
         transition!(FirstAck {
             tx_ssh: ser,
-            rx_ssh: state.rx_ssh.into_future(),
+            rx_ssh: state.rx_ssh,
             tx_user: state.tx_user,
             rx_user: state.rx_user,
+            saw_ok: false,
         })
     }
 
     fn poll_first_ack<'a>(
         state: &'a mut RentToOwn<'a, FirstAck>
     ) -> Poll<AfterFirstAck, Error> {
-        let (msg, de) = match state.rx_ssh.poll() {
-            Ok(Async::Ready((msg, de))) => (msg, de),
-            Ok(Async::NotReady) => {
-                return Ok(Async::NotReady);
-            },
-            Err((e, _de)) => {
-                return Err(e.into());
+        while let Async::Ready(msg) = state.rx_ssh.poll()? {
+            match msg {
+                Some(ServerMessage::Ok) => {
+                    state.saw_ok = true;
+                },
+
+                Some(ServerMessage::Error(text)) => {
+                    return Err(format_err!("{}", text));
+                },
+
+                Some(other) => {
+                    return Err(format_err!("unexpected response from daemon: {:?}", other));
+                },
+
+                None => {
+                    return Err(format_err!("connection closed (?)"));
+                },
             }
-        };
-
-        match msg {
-            Some(ServerMessage::Ok) => {},
-
-            Some(ServerMessage::Error(text)) => {
-                return Err(format_err!("{}", text));
-            },
-
-            Some(other) => {
-                return Err(format_err!("unexpected response from daemon: {:?}", other));
-            },
-
-            None => {
-                return Err(format_err!("connection closed (?)"));
-            },
         }
 
-        let state = state.take();
+        if state.saw_ok {
+            let state = state.take();
 
-        transition!(Communicating {
-            rx_user: state.rx_user,
-            tx_user: state.tx_user,
-            user_buf: Vec::new(),
-            finished: FinishCommunicationState::SawFirstEnter,
-            tx_ssh: state.tx_ssh,
-            rx_ssh: de,
-            ssh_buf: Vec::new(),
-        })
+            transition!(Communicating {
+                rx_user: state.rx_user,
+                tx_user: state.tx_user,
+                user_buf: Vec::new(),
+                finished: FinishCommunicationState::SawFirstEnter,
+                tx_ssh: state.tx_ssh,
+                rx_ssh: state.rx_ssh,
+                ssh_buf: Vec::new(),
+            })
+        }
+
+        Ok(Async::NotReady)
     }
 
     fn poll_communicating<'a>(
@@ -323,22 +323,15 @@ impl PollOpenWorkflow for OpenWorkflow {
     fn poll_cleaning_up_io<'a>(
         state: &'a mut RentToOwn<'a, CleaningUpIo>
     ) -> Poll<AfterCleaningUpIo, Error> {
-        eprintln!("cleaning up; sent? {:?}", state.sent_finished_message);
-
         if !state.sent_finished_message {
             if let AsyncSink::Ready = state.tx_ssh.start_send(ClientMessage::EndOfUserData)? {
-                eprintln!("sent it");
                 state.sent_finished_message = true;
             }
         }
 
         try_ready!(state.tx_ssh.poll_complete());
 
-        eprintln!("cleanup rx poll");
-
-        if let Async::Ready(msg) = state.rx_ssh.poll()? {
-            eprintln!("server message: {:?}", msg);
-
+        while let Async::Ready(msg) = state.rx_ssh.poll()? {
             match msg {
                 // Might as well print this out
                 Some(ServerMessage::SshData(_data)) => {
@@ -346,7 +339,6 @@ impl PollOpenWorkflow for OpenWorkflow {
                 },
 
                 Some(ServerMessage::Error(e)) => {
-                    //println!("");
                     return Err(format_err!("{}", e));
                 }
 
@@ -368,9 +360,8 @@ impl PollOpenWorkflow for OpenWorkflow {
         if state.saw_ok {
             let state = state.take();
             transition!(Finished((state.tx_ssh, state.rx_ssh)))
-        } else {
-            eprintln!("try again");
-            Ok(Async::NotReady)
         }
+
+        Ok(Async::NotReady)
     }
 }
