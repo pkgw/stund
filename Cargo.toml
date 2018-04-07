@@ -7,6 +7,7 @@ authors = ["Peter Williams <peter@newton.cx>"]
 
 [dependencies]
 atty = "0.2"
+bytes = "0.4"
 daemonize = "0.2"
 failure = "0.1"
 futures = "0.1"
@@ -14,7 +15,9 @@ libc = "0.2"
 state_machine_future = "0.1"
 structopt = "0.2"
 stund = { path = "stund", version = "0.1.0" }
+tokio-borrow-stdio = { path = "tokio-borrow-stdio", version = "0.1.0" }
 tokio-core = "0.1"
+tokio-file-unix = "0.4"
 tokio-io = "0.1"
 tokio-pty-process = { path = "tokio-pty-process", version = "0.1.0" }
 tokio-serde-json = { git = "https://github.com/carllerche/tokio-serde-json" }
