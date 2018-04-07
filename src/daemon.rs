@@ -7,7 +7,6 @@ use base64;
 use daemonize;
 use failure::{Error, ResultExt};
 use futures::{Async, AsyncSink, Future, Poll, Sink, Stream};
-use futures::future::Either;
 use futures::sink::Send;
 use futures::stream::{SplitSink, SplitStream, StreamFuture};
 use futures::sync::{mpsc, oneshot};
@@ -383,8 +382,7 @@ enum Client {
     Aborting {
         common: ClientCommonState,
         tx: Send<Ser>,
-        rx: Either<De, StreamFuture<De>>,
-        message: Option<String>,
+        rx: De,
     },
 
     #[state_machine_future(error)]
@@ -588,16 +586,8 @@ impl PollClient for Client {
     fn poll_aborting<'a>(
         state: &'a mut RentToOwn<'a, Aborting>
     ) -> Poll<AfterAborting, Error> {
-        let ser = try_ready!(state.tx.poll());
-        let mut state = state.take();
-
-        if let Some(msg) = state.message {
-            state.tx = ser.send(ServerMessage::Error(msg));
-            state.message = None;
-            transition!(state)
-        } else {
-            Err(format_err!("ending connection now that client has been notified"))
-        }
+        try_ready!(state.tx.poll());
+        Err(format_err!("ending connection now that client has been notified"))
     }
 }
 
@@ -705,62 +695,13 @@ fn hand_off_ssh_process(
 }
 
 
-// Little framework for being able to transition into an "abort" state, where
-// we notify the client of an error and then close the connection. The tricky
-// part is that we'd like this to work regardless of whether we're in `Ser`
-// state or `Send<Ser>` state. In the latter, we need to wait for the previous
-// send to complete before we can send the error message. Ditto for the
-// reception side, although we do not plan to listen for any more data on this
-// connection.
-
-trait IntoEitherTx { fn into_either_tx(self) -> Either<Ser, Send<Ser>>; }
-
-impl IntoEitherTx for Ser {
-    fn into_either_tx(self) -> Either<Ser, Send<Ser>> { Either::A(self) }
-}
-
-impl IntoEitherTx for Send<Ser> {
-    fn into_either_tx(self) -> Either<Ser, Send<Ser>> { Either::B(self) }
-}
-
-impl IntoEitherTx for Either<Ser, Send<Ser>> {
-    fn into_either_tx(self) -> Either<Ser, Send<Ser>> { self }
-}
-
-trait IntoEitherRx { fn into_either_rx(self) -> Either<De, StreamFuture<De>>; }
-
-impl IntoEitherRx for De {
-    fn into_either_rx(self) -> Either<De, StreamFuture<De>> { Either::A(self) }
-}
-
-impl IntoEitherRx for StreamFuture<De> {
-    fn into_either_rx(self) -> Either<De, StreamFuture<De>> { Either::B(self) }
-}
-
-impl IntoEitherRx for Either<De, StreamFuture<De>> {
-    fn into_either_rx(self) -> Either<De, StreamFuture<De>> { self }
-}
-
-fn abort_client<T: IntoEitherTx, R: IntoEitherRx>(
-    common: ClientCommonState, tx: T, rx: R, message: String
-) -> Aborting {
-    let tx = tx.into_either_tx();
-    let rx = rx.into_either_rx();
-
-    let (tx, msg) = match tx {
-        Either::A(ser) => {
-            (ser.send(ServerMessage::Error(message)), None)
-        },
-
-        Either::B(snd) => {
-            (snd, Some(message))
-        },
-    };
-
+/// This function used to be much more elaborate; it can probably be ditched
+/// now.
+fn abort_client(common: ClientCommonState, tx: Ser, rx: De, message: String) -> Aborting
+{
     Aborting {
         common: common,
-        tx: tx,
+        tx: tx.send(ServerMessage::Error(message)),
         rx: rx,
-        message: msg,
     }
 }
