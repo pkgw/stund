@@ -25,7 +25,7 @@ use std::path::PathBuf;
 use std::process::ExitStatus;
 use std::sync::{Arc, Mutex};
 use stund_protocol::*;
-use tokio_core::reactor::{Core, Handle, Remote}; // TODO: tokio_core is deprecated
+use tokio_core::reactor::{Core, Handle};
 use tokio_io::AsyncRead;
 use tokio_io::codec::length_delimited::{FramedRead, FramedWrite};
 use tokio_io::codec::{BytesCodec, Framed};
@@ -56,7 +56,6 @@ const FATAL_SIGNALS: &[i32] = &[
 
 
 pub struct State {
-    remote: Option<Remote>,
     sock_path: PathBuf,
     _opts: StundDaemonOptions,
     log: Box<Write + StdSend>,
@@ -105,7 +104,6 @@ impl State {
         };
 
         Ok(State {
-            remote: None,
             sock_path: p,
             _opts: opts,
             log: log,
@@ -125,7 +123,6 @@ impl State {
     pub fn serve(mut self) -> Result<(), Error> {
         let mut core = Core::new()?;
         let handle = core.handle();
-        self.remote = Some(core.remote());
         let listener = UnixListener::bind(&self.sock_path, &handle)?;
 
         log!(self, "starting up");
