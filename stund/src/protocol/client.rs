@@ -186,7 +186,6 @@ impl PollOpenWorkflow for OpenWorkflow {
     fn poll_issue<'a>(
         state: &'a mut RentToOwn<'a, Issue>
     ) -> Poll<AfterIssue, Error> {
-        eprintln!("poll issue");
         let ser = try_ready!(state.tx_ssh.poll());
 
         let state = state.take();
@@ -201,7 +200,6 @@ impl PollOpenWorkflow for OpenWorkflow {
     fn poll_first_ack<'a>(
         state: &'a mut RentToOwn<'a, FirstAck>
     ) -> Poll<AfterFirstAck, Error> {
-        eprintln!("poll first");
         let (msg, de) = match state.rx_ssh.poll() {
             Ok(Async::Ready((msg, de))) => (msg, de),
             Ok(Async::NotReady) => {
@@ -244,28 +242,19 @@ impl PollOpenWorkflow for OpenWorkflow {
     fn poll_communicating<'a>(
         state: &'a mut RentToOwn<'a, Communicating>
     ) -> Poll<AfterCommunicating, Error> {
-        eprintln!("communicate");
-
         // New text from the daemon?
 
         while let Async::Ready(msg) = state.rx_ssh.poll()? {
-            eprintln!("something from SSH: {:?}", msg);
-
             match msg {
                 Some(ServerMessage::SshData(data)) => {
-                    eprintln!("ssh data");
                     state.user_buf.extend_from_slice(&data);
                 },
 
                 Some(ServerMessage::Error(e)) => {
-                    //println!("");
-                    eprintln!("e2");
                     return Err(format_err!("{}", e));
                 }
 
                 Some(other) => {
-                    //println!("");
-                    eprintln!("e3");
                     return Err(format_err!("unexpected message from the daemon: {:?}", other));
                 },
 
@@ -282,16 +271,11 @@ impl PollOpenWorkflow for OpenWorkflow {
                 },
 
                 Some(b) => {
-                    eprintln!("user data");
                     state.ssh_buf.extend_from_slice(&b);
 
-                    let mut t = state.finished;
-
                     for single_byte in &b {
-                        t = t.transition(*single_byte);
+                        state.finished = state.finished.transition(*single_byte);
                     }
-
-                    state.finished = t;
                 }
             }
         }
@@ -299,48 +283,31 @@ impl PollOpenWorkflow for OpenWorkflow {
         // Ready/able to send bytes to the user?
 
         if state.user_buf.len() != 0 {
-            eprintln!("user tx");
             let buf = state.user_buf.clone();
 
-            match state.tx_user.start_send(buf) {
-                Ok(AsyncSink::Ready) => {
+            if let AsyncSink::Ready = state.tx_user.start_send(buf)? {
                     state.user_buf.clear();
-                },
-
-                Err(e) => { return Err(e.into()); },
-
-                Ok(AsyncSink::NotReady(_)) => {}
             }
         }
 
         // Ready/able to send bytes to the daemon?
 
         if state.ssh_buf.len() != 0 {
-            eprintln!("daemon tx");
             let buf = state.ssh_buf.clone();
 
-            match state.tx_ssh.start_send(ClientMessage::UserData(buf)) {
-                Ok(AsyncSink::Ready) => {
-                    state.ssh_buf.clear();
-                },
-
-                Err(e) => { return Err(e.into()); },
-
-                Ok(AsyncSink::NotReady(_)) => {}
+            if let AsyncSink::Ready = state.tx_ssh.start_send(ClientMessage::UserData(buf))? {
+                state.ssh_buf.clear();
             }
         }
 
-        // Flushing out our transmissions is highest priority.
+        // Gotta flush those transitions.
 
         try_ready!(state.tx_user.poll_complete());
         try_ready!(state.tx_ssh.poll_complete());
 
-        // Finally ready to figure out what our next step is. It's a bit of a
-        // hassle to make sure that we clean up any pending operations
-        // gracefully.
+        // Next step?
 
         if let FinishCommunicationState::SawSecondEnter = state.finished {
-            eprintln!("finish??");
             let mut state = state.take();
             transition!(CleaningUpIo {
                 tx_ssh: state.tx_ssh,
@@ -348,10 +315,9 @@ impl PollOpenWorkflow for OpenWorkflow {
                 sent_finished_message: false,
                 saw_ok: false,
             })
-        } else {
-            eprintln!("loop");
-            Ok(Async::NotReady)
         }
+
+        Ok(Async::NotReady)
     }
 
     fn poll_cleaning_up_io<'a>(
