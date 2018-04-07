@@ -100,15 +100,16 @@ impl Connection {
 
     pub fn send_open<T, R>(
         mut self, params: OpenParameters, tx_user: T, rx_user: R
-    ) -> Result<Self, Error>
+    ) -> Result<(OpenResult, Self), Error>
         where T: 'static + Sink<SinkItem = Vec<u8>, SinkError = io::Error>,
               R: 'static + Stream<Item = Vec<u8>, Error = io::Error>
     {
         let fut = self.ser.send(ClientMessage::Open(params));
-        let (ser, de) = self.core.run(OpenWorkflow::start(fut, self.de, Box::new(tx_user), Box::new(rx_user)))?;
+        let wf = OpenWorkflow::start(fut, self.de, Box::new(tx_user), Box::new(rx_user));
+        let (ser, de, result) = self.core.run(wf)?;
         self.ser = ser;
         self.de = de;
-        Ok(self)
+        Ok((result, self))
     }
 }
 
@@ -124,7 +125,7 @@ enum OpenWorkflow {
         rx_user: UserInputStream,
     },
 
-    #[state_machine_future(transitions(FirstAck, Communicating))]
+    #[state_machine_future(transitions(Finished, Communicating))]
     FirstAck {
         tx_ssh: Ser,
         rx_ssh: De,
@@ -153,7 +154,7 @@ enum OpenWorkflow {
     },
 
     #[state_machine_future(ready)]
-    Finished((Ser, De)),
+    Finished((Ser, De, OpenResult)),
 
     #[state_machine_future(error)]
     Failed(Error),
@@ -226,6 +227,11 @@ impl PollOpenWorkflow for OpenWorkflow {
 
                 Some(ServerMessage::Error(text)) => {
                     return Err(format_err!("{}", text));
+                },
+
+                Some(ServerMessage::TunnelAlreadyOpen) => {
+                    let state = state.take();
+                    transition!(Finished((state.tx_ssh, state.rx_ssh, OpenResult::AlreadyOpen)));
                 },
 
                 Some(other) => {
@@ -361,10 +367,9 @@ impl PollOpenWorkflow for OpenWorkflow {
                     state.saw_ok = true;
                 }
 
-                //Some(other) => {
-                //    println!("");
-                //    return Err(format_err!("unexpected message from the daemon: {:?}", other));
-                //},
+                Some(other) => {
+                    return Err(format_err!("unexpected message from the daemon: {:?}", other));
+                },
 
                 None => {},
             }
@@ -374,7 +379,7 @@ impl PollOpenWorkflow for OpenWorkflow {
 
         if state.saw_ok {
             let state = state.take();
-            transition!(Finished((state.tx_ssh, state.rx_ssh)))
+            transition!(Finished((state.tx_ssh, state.rx_ssh, OpenResult::Success)))
         }
 
         Ok(Async::NotReady)

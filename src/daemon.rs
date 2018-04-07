@@ -346,14 +346,14 @@ impl ClientCommonState {
 #[derive(StateMachineFuture)]
 #[allow(unused)] // get lots of these spuriously; custom derive stuff?
 enum Client {
-    #[state_machine_future(start, transitions(CommunicatingForOpen, Finished, Aborting))]
+    #[state_machine_future(start, transitions(CommunicatingForOpen, FinalizingTxn, Finished, Aborting))]
     AwaitingCommand {
         common: ClientCommonState,
         tx: Ser,
         rx: De,
     },
 
-    #[state_machine_future(transitions(Aborting, CommunicatingForOpen, FinalizingOpen))]
+    #[state_machine_future(transitions(Aborting, CommunicatingForOpen, FinalizingTxn))]
     CommunicatingForOpen {
         common: ClientCommonState,
         cl_tx: Ser,
@@ -367,7 +367,7 @@ enum Client {
     },
 
     #[state_machine_future(transitions(AwaitingCommand))]
-    FinalizingOpen {
+    FinalizingTxn {
         common: ClientCommonState,
         tx: Send<Ser>,
         rx: De,
@@ -520,7 +520,7 @@ impl PollClient for Client {
                                  state.ssh_tx, state.ssh_rx);
 
             let send = state.cl_tx.send(ServerMessage::Ok);
-            transition!(FinalizingOpen {
+            transition!(FinalizingTxn {
                 common: state.common,
                 tx: send,
                 rx: state.cl_rx,
@@ -533,9 +533,9 @@ impl PollClient for Client {
     /// OMG, we actually started SSH successfully. Once we make sure that the
     /// client has received its success notification, we can go back to
     /// waiting for its next command.
-    fn poll_finalizing_open<'a>(
-        state: &'a mut RentToOwn<'a, FinalizingOpen>
-    ) -> Poll<AfterFinalizingOpen, Error> {
+    fn poll_finalizing_txn<'a>(
+        state: &'a mut RentToOwn<'a, FinalizingTxn>
+    ) -> Poll<AfterFinalizingTxn, Error> {
         let mut state = state.take();
         let ser = try_ready!(state.tx.poll());
 
@@ -572,6 +572,12 @@ fn handle_open_command(
     common: ClientCommonState, params: OpenParameters, mut tx: Ser, rx: De
 ) -> Poll<AfterAwaitingCommand, Error> {
     log!(common.shared(), "got command to spawn SSH for {}", params.host);
+
+    if common.shared().children.contains_key(&params.host) {
+        log!(common.shared(), "tunnel already open -- notifying client");
+        let send = tx.send(ServerMessage::TunnelAlreadyOpen);
+        transition!(FinalizingTxn { common, tx: send, rx });
+    }
 
     let (tx_die, rx_die) = mpsc::channel(0);
 

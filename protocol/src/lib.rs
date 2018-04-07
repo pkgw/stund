@@ -51,13 +51,30 @@ pub enum ClientMessage {
 
 #[derive(Debug, Deserialize, PartialEq, Serialize)]
 pub enum ServerMessage {
+    /// Generic message indicating success with whatever the client was asking
+    /// for.
     Ok,
-    SshData(Vec<u8>),
+
+    /// Generic message indicating an error with whatever the client was
+    /// asking for.
     Error(String),
+
+    /// Output from an SSH process to be reported to the user by the client.
+    SshData(Vec<u8>),
+
+    /// In response to an `Open` message, indicates that this tunnel is
+    /// already open.
+    TunnelAlreadyOpen,
 }
 
 
 #[derive(Debug, Deserialize, PartialEq, Serialize)]
 pub struct OpenParameters {
     pub host: String
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum OpenResult {
+    Success,
+    AlreadyOpen
 }

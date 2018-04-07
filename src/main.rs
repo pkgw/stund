@@ -24,7 +24,7 @@ use std::io;
 use std::mem;
 use std::process;
 use structopt::StructOpt;
-use stund_protocol::OpenParameters;
+use stund_protocol::{OpenParameters, OpenResult};
 use stund_protocol::client::Connection;
 
 mod daemon;
@@ -71,7 +71,7 @@ impl StundOpenOptions {
     fn cli(self) -> Result<i32, Error> {
         let params = OpenParameters { host: self.host.clone() };
 
-        let mut conn = Connection::establish(true)?;
+        let conn = Connection::establish(true)?;
 
         println!("[Log in and type \".\" on its own line when finished.]");
 
@@ -82,7 +82,12 @@ impl StundOpenOptions {
         });
         toggle_terminal_echo(true);
 
-        conn = r?;
+        let (result, conn) = r?;
+
+        if let OpenResult::AlreadyOpen = result {
+            println!("[Tunnel is already open.]");
+        }
+
         conn.close()?;
         Ok(0)
     }
