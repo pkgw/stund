@@ -611,13 +611,9 @@ impl PollClient for Client {
     fn poll_communicating_for_open<'a>(
         state: &'a mut RentToOwn<'a, CommunicatingForOpen>
     ) -> Poll<AfterCommunicatingForOpen, Error> {
-        eprintln!("comm");
-
         // New text from the user?
 
         while let Async::Ready(msg) = state.cl_rx.poll()? {
-            eprintln!("client message: {:?}", msg);
-
             match msg {
                 Some(ClientMessage::UserData(data)) => {
                     if state.saw_end {
@@ -656,62 +652,51 @@ impl PollClient for Client {
                 },
             };
 
-            if let Async::Ready(bytes) = outcome {
-                eprintln!("SSH data");
+            match outcome {
+                Async::NotReady => break,
 
-                if let Some(b) = bytes {
-                    state.cl_buf.extend_from_slice(&b);
+                Async::Ready(maybe_bytes) => {
+                    if let Some(b) = maybe_bytes {
+                        state.cl_buf.extend_from_slice(&b);
+                    } else  {
+                        // EOF from SSH -- it has probably died.
+                        let msg = format!("unexpected EOF from SSH (program died?)");
+                        let mut state = state.take();
+                        transition!(abort_client(state.common, state.cl_tx, state.cl_rx, msg));
+                    }
                 }
-            } else {
-                break;
             }
         }
 
         // Ready/able to send bytes to the client?
 
         if state.cl_buf.len() != 0 {
-            eprintln!("sending to client");
             let buf = state.cl_buf.clone();
 
-            match state.cl_tx.start_send(ServerMessage::SshData(buf)) {
-                Ok(AsyncSink::Ready) => {
-                    state.cl_buf.clear();
-                },
-
-                Err(e) => { return Err(e.into()); },
-
-                Ok(AsyncSink::NotReady(_)) => {}
+            if let AsyncSink::Ready = state.cl_tx.start_send(ServerMessage::SshData(buf))? {
+                state.cl_buf.clear();
             }
         }
 
         // Ready/able to send bytes to SSH?
 
         if state.ssh_buf.len() != 0 {
-            eprintln!("sending to SSH");
             let buf = state.ssh_buf.clone();
 
-            match state.ssh_tx.start_send(buf.into()) {
-                Ok(AsyncSink::Ready) => {
-                    state.ssh_buf.clear();
-                },
-
-                Err(e) => { return Err(e.into()); },
-
-                Ok(AsyncSink::NotReady(_)) => {}
+            if let AsyncSink::Ready = state.ssh_tx.start_send(buf.into())? {
+                state.ssh_buf.clear();
             }
         }
 
-        // Flushing transmissions is highest priority
+        // Gotta flush those transmissions.
 
         try_ready!(state.cl_tx.poll_complete());
         try_ready!(state.ssh_tx.poll_complete());
-        println!("transmissions flushed");
 
         // What's next? Even if we're finished, we can't transition to the
         // next state until we're ready to send the OK message.
 
         if state.saw_end {
-            eprintln!("ready to move on");
             let state = state.take();
 
             hand_off_ssh_process(&state.common.handle, state.common.shared.clone(),
@@ -725,7 +710,6 @@ impl PollClient for Client {
             });
         }
 
-        eprintln!("not ready in the end");
         Ok(Async::NotReady)
     }
 
