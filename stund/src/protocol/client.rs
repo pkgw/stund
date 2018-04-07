@@ -3,13 +3,17 @@
 
 //! Interfacing with the daemon.
 
-use failure::Error;
+use failure::{Error, ResultExt};
 use futures::{Async, AsyncSink, Future, Poll, Sink, Stream};
 use futures::sink::Send;
 use libc;
 use state_machine_future::RentToOwn;
+use std::env;
 use std::io;
 use std::mem;
+use std::process;
+use std::thread;
+use std::time;
 use std::os::unix::io::AsRawFd;
 use tokio_core::reactor::Core;
 use tokio_io::AsyncRead;
@@ -34,13 +38,35 @@ pub struct Connection {
 }
 
 impl Connection {
-    pub fn establish() -> Result<Self, Error> {
-        let core = Core::new()?;
+    pub fn establish(autolaunch: bool) -> Result<Self, Error> {
+        let core = Core::new().context("couldn't create IO core?")?;
         let handle = core.handle();
+        let sock_path = get_socket_path().context("couldn't get path to talk to daemon")?;
 
-        // TODO: launch daemon if can't connect and some `autolaunch` option
-        // is true.
-        let conn = UnixStream::connect(get_socket_path()?, &handle)?;
+        let conn = match UnixStream::connect(&sock_path, &handle) {
+            Ok(c) => c,
+            Err(e) => {
+                if !autolaunch {
+                    return Err(e.into());
+                }
+
+                let curr_exe = env::current_exe().context("couldn't get current executable path")?;
+
+                let status = process::Command::new(&curr_exe)
+                    .arg("daemon")
+                    .status()
+                    .context("daemon launcher reported failure")?;
+
+                thread::sleep(time::Duration::from_millis(300));
+
+                if status.success() {
+                    UnixStream::connect(&sock_path, &handle)
+                        .context("failed to connect to daemon even after launching it")?
+                } else {
+                    return Err(format_err!("failed to launch background daemon"));
+                }
+            },
+        };
 
         unsafe {
             // Without turning on linger, I find that the tokio-ized version

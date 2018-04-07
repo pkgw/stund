@@ -73,7 +73,7 @@ impl StundOpenOptions {
     fn cli(self) -> Result<i32, Error> {
         let params = OpenParameters { host: self.host.clone() };
 
-        let mut conn = Connection::establish()?;
+        let mut conn = Connection::establish(true)?;
 
         println!("[Log in and type \".\" on its own line when finished.]");
 
