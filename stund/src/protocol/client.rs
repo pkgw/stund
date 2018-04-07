@@ -6,13 +6,12 @@
 use failure::Error;
 use futures::{Async, AsyncSink, Future, Poll, Sink, Stream};
 use futures::sink::Send;
-use futures::stream::StreamFuture;
 use libc;
 use state_machine_future::RentToOwn;
 use std::io;
 use std::mem;
 use std::os::unix::io::AsRawFd;
-use tokio_core::reactor::{Core, Handle};
+use tokio_core::reactor::Core;
 use tokio_io::AsyncRead;
 use tokio_io::codec::length_delimited::{FramedRead, FramedWrite};
 use tokio_io::io::{ReadHalf, WriteHalf};
@@ -24,6 +23,9 @@ use super::*;
 
 type Ser = WriteJson<FramedWrite<WriteHalf<UnixStream>>, ClientMessage>;
 type De = ReadJson<FramedRead<ReadHalf<UnixStream>>, ServerMessage>;
+type UserInputStream = Box<Stream<Item = Vec<u8>, Error = io::Error>>;
+type UserOutputSink = Box<Sink<SinkItem = Vec<u8>, SinkError = io::Error>>;
+
 
 pub struct Connection {
     core: Core,
@@ -64,11 +66,6 @@ impl Connection {
     }
 
 
-    pub fn handle(&self) -> Handle {
-        self.core.handle()
-    }
-
-
     pub fn close(mut self) -> Result<(), Error> {
         self.core.run(self.ser.send(ClientMessage::Goodbye))?;
         Ok(())
@@ -87,11 +84,6 @@ impl Connection {
         self.de = de;
         Ok(self)
     }
-}
-
-
-pub trait OpenInteraction {
-    fn get_handles(&self) -> Result<(UserOutputSink, UserInputStream), Error>;
 }
 
 
@@ -119,11 +111,11 @@ enum OpenWorkflow {
     Communicating {
         tx_ssh: Ser,
         rx_ssh: De,
+        ssh_buf: Vec<u8>,
         tx_user: UserOutputSink,
         rx_user: UserInputStream,
         user_buf: Vec<u8>,
         finished: FinishCommunicationState,
-        ssh_buf: Vec<u8>,
     },
 
     #[state_machine_future(transitions(CleaningUpIo, Finished))]
@@ -141,8 +133,6 @@ enum OpenWorkflow {
     Failed(Error),
 }
 
-type UserInputStream = Box<Stream<Item = Vec<u8>, Error = io::Error>>;
-type UserOutputSink = Box<Sink<SinkItem = Vec<u8>, SinkError = io::Error>>;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum FinishCommunicationState {
@@ -300,7 +290,7 @@ impl PollOpenWorkflow for OpenWorkflow {
             }
         }
 
-        // Gotta flush those transitions.
+        // Gotta flush those transmissions.
 
         try_ready!(state.tx_user.poll_complete());
         try_ready!(state.tx_ssh.poll_complete());
@@ -333,9 +323,8 @@ impl PollOpenWorkflow for OpenWorkflow {
 
         while let Async::Ready(msg) = state.rx_ssh.poll()? {
             match msg {
-                // Might as well print this out
                 Some(ServerMessage::SshData(_data)) => {
-                    //println!("blah blah ignoring trailing data");
+                    eprintln!("warning: ignored some trailing SSH output");
                 },
 
                 Some(ServerMessage::Error(e)) => {
