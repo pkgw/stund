@@ -9,8 +9,7 @@ use futures::{Async, AsyncSink, Future, Poll, Sink, Stream};
 use futures::future::Either;
 use futures::sink::Send;
 use futures::stream::{SplitSink, SplitStream, StreamFuture};
-use futures::sync::mpsc::{channel, Receiver, Sender};
-use futures::sync::oneshot;
+use futures::sync::{mpsc, oneshot};
 use libc;
 use state_machine_future::RentToOwn;
 use std::collections::HashMap;
@@ -59,7 +58,7 @@ pub struct State {
     sock_path: PathBuf,
     _opts: StundDaemonOptions,
     log: Box<Write + StdSend>,
-    tx_new_ssh: Option<Sender<(OpenParameters, TxFin)>>,
+    tx_new_ssh: Option<mpsc::Sender<(OpenParameters, TxFin)>>,
     children: HashMap<String, Tunnel>,
 }
 
@@ -129,7 +128,7 @@ impl State {
 
         // Needed to command the creation of an SSH client
 
-        let (tx_new_ssh, rx_new_ssh) = channel(8);
+        let (tx_new_ssh, rx_new_ssh) = mpsc::channel(8);
         self.tx_new_ssh = Some(tx_new_ssh);
 
         let shared = Arc::new(Mutex::new(self));
@@ -140,7 +139,7 @@ impl State {
         // exit for multiple reasons: we got a bad-news signal, or a client
         // told us to.
 
-        let (tx_exit, rx_exit) = channel(8);
+        let (tx_exit, rx_exit) = mpsc::channel(8);
 
         // signal handling -- we're forced to have one stream for each signal;
         // we spawn a task for each of these that forwards an exit
@@ -183,7 +182,7 @@ impl State {
             //println!("got command to spawn SSH for {}", params.host);
 
             let (tx_kill, rx_kill) = oneshot::channel();
-            let (tx_die, rx_die) = channel(0);
+            let (tx_die, rx_die) = mpsc::channel(0);
 
             let inner = || {
                 let ptymaster = AsyncPtyMaster::open(&handle2).context("failed to create PTY")?;
@@ -250,7 +249,7 @@ impl State {
 struct NewSshInfo {
     pub ptywrite: PtySink,
     pub ptyread: PtyStream,
-    pub rx_die: Receiver<Option<ExitStatus>>,
+    pub rx_die: mpsc::Receiver<Option<ExitStatus>>,
 }
 
 
@@ -273,12 +272,12 @@ enum ChildMonitor {
         key: String,
         child: Child,
         rx_kill: oneshot::Receiver<()>,
-        tx_die: Sender<Option<ExitStatus>>, // None if child was explicitly killed
+        tx_die: mpsc::Sender<Option<ExitStatus>>, // None if child was explicitly killed
     },
 
     #[state_machine_future(transitions(ChildReaped))]
     NotifyingChildDied {
-        tx_die: Send<Sender<Option<ExitStatus>>>,
+        tx_die: Send<mpsc::Sender<Option<ExitStatus>>>,
     },
 
     #[state_machine_future(ready)]
@@ -358,7 +357,7 @@ impl PollChildMonitor for ChildMonitor {
 
 fn process_client(
     handle: &Handle, socket: UnixStream, addr: SocketAddr, shared: Arc<Mutex<State>>,
-    tx_exit: Sender<()>,
+    tx_exit: mpsc::Sender<()>,
 ) {
     // Without turning on linger, I find that the tokio-ized version loses
     // the last bytes of the session. Let's just ignore the return value
@@ -401,7 +400,7 @@ struct ClientCommonState {
     handle: Handle,
     shared: Arc<Mutex<State>>,
     _addr: SocketAddr,
-    _tx_exit: Option<Sender<()>>,
+    _tx_exit: Option<mpsc::Sender<()>>,
 }
 
 impl ClientCommonState {
@@ -453,7 +452,7 @@ enum Client {
         ssh_tx: PtySink,
         ssh_rx: PtyStream,
         ssh_buf: Vec<u8>,
-        ssh_die: StreamFuture<Receiver<Option<ExitStatus>>>,
+        ssh_die: StreamFuture<mpsc::Receiver<Option<ExitStatus>>>,
         saw_end: bool,
     },
 
