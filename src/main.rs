@@ -22,6 +22,7 @@ extern crate tokio_uds;
 
 use failure::Error;
 use std::io;
+use std::mem;
 use std::process;
 use structopt::StructOpt;
 use stund::protocol::OpenParameters;
@@ -76,11 +77,14 @@ impl StundOpenOptions {
 
         println!("[Log in and type \".\" on its own line when finished.]");
 
-        conn = tokio_borrow_stdio::borrow_stdio(|stdin, stdout| {
+        toggle_terminal_echo(false);
+        let r = tokio_borrow_stdio::borrow_stdio(|stdin, stdout| {
             conn.send_open(params, Box::new(stdout), Box::new(stdin))
                 .map_err(|_| io::ErrorKind::Other.into())
-        })?;
+        });
+        toggle_terminal_echo(true);
 
+        conn = r?;
         println!("[Success!]");
 
         conn.close()?;
@@ -130,4 +134,28 @@ fn main() {
             1
         },
     });
+}
+
+
+fn toggle_terminal_echo(active: bool) {
+    if atty::isnt(atty::Stream::Stdout) {
+        return;
+    }
+
+    let mut attrs: libc::termios = unsafe { mem::zeroed() };
+
+    if unsafe { libc::tcgetattr(0, &mut attrs as _) } != 0 {
+        println!("error querying terminal attributes?!");
+        return;
+    }
+
+    if active {
+        attrs.c_lflag |= libc::ECHO;
+    } else {
+        attrs.c_lflag &= !libc::ECHO;
+    }
+
+    if unsafe { libc::tcsetattr(0, libc::TCSANOW, &attrs as _) } != 0 {
+        println!("error setting terminal attributes?!");
+    }
 }
