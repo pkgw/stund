@@ -42,6 +42,7 @@ impl AsyncPtyFile {
 
 impl Read for AsyncPtyFile {
     fn read(&mut self, bytes: &mut [u8]) -> io::Result<usize> {
+        eprintln!("low-level reading from PTY");
         self.0.read(bytes)
     }
 }
@@ -58,6 +59,7 @@ impl Write for AsyncPtyFile {
 
 impl Evented for AsyncPtyFile {
     fn register(&self, poll: &mio::Poll, token: Token, interest: Ready, opts: PollOpt) -> io::Result<()> {
+        eprintln!("PTY REG: {:?} {:?} {:?}", token, interest, opts);
         EventedFd(&self.0.as_raw_fd()).register(poll,
                                                 token,
                                                 interest | UnixReady::hup(),
@@ -65,6 +67,7 @@ impl Evented for AsyncPtyFile {
     }
 
     fn reregister(&self, poll: &mio::Poll, token: Token, interest: Ready, opts: PollOpt) -> io::Result<()> {
+        eprintln!("PTY REREG: {:?} {:?} {:?}", token, interest, opts);
         EventedFd(&self.0.as_raw_fd()).reregister(poll,
                                                   token,
                                                   interest | UnixReady::hup(),
@@ -72,6 +75,7 @@ impl Evented for AsyncPtyFile {
     }
 
     fn deregister(&self, poll: &mio::Poll) -> io::Result<()> {
+        eprintln!("PTY DEREG");
         EventedFd(&self.0.as_raw_fd()).deregister(poll)
     }
 }

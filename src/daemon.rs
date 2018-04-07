@@ -611,16 +611,11 @@ impl PollClient for Client {
     fn poll_communicating_for_open<'a>(
         state: &'a mut RentToOwn<'a, CommunicatingForOpen>
     ) -> Poll<AfterCommunicatingForOpen, Error> {
+        eprintln!("comm");
+
         // New text from the user?
 
-        let outcome = match state.cl_rx.poll() {
-            Ok(x) => x,
-            Err(e) => {
-                return Err(e.into());
-            },
-        };
-
-        if let Async::Ready(msg) = outcome {
+        while let Async::Ready(msg) = state.cl_rx.poll()? {
             eprintln!("client message: {:?}", msg);
 
             match msg {
@@ -649,20 +644,24 @@ impl PollClient for Client {
 
         // New text from SSH?
 
-        let outcome = match state.ssh_rx.poll() {
-            Ok(x) => x,
-            Err(e) => {
-                let msg = format!("something went wrong communicating with the SSH process: {}", e);
-                let mut state = state.take();
-                transition!(abort_client(state.common, state.cl_tx, state.cl_rx, msg));
-            },
-        };
+        loop {
+            let outcome = match state.ssh_rx.poll() {
+                Ok(x) => x,
+                Err(e) => {
+                    let msg = format!("something went wrong communicating with the SSH process: {}", e);
+                    let mut state = state.take();
+                    transition!(abort_client(state.common, state.cl_tx, state.cl_rx, msg));
+                },
+            };
 
-        if let Async::Ready(bytes) = outcome {
-            eprintln!("SSH data");
+            if let Async::Ready(bytes) = outcome {
+                eprintln!("SSH data");
 
-            if let Some(b) = bytes {
-                state.cl_buf.extend_from_slice(&b);
+                if let Some(b) = bytes {
+                    state.cl_buf.extend_from_slice(&b);
+                }
+            } else {
+                break;
             }
         }
 
@@ -702,9 +701,9 @@ impl PollClient for Client {
 
         // Flushing transmissions is highest priority
 
-        eprintln!("comm");
         try_ready!(state.cl_tx.poll_complete());
         try_ready!(state.ssh_tx.poll_complete());
+        println!("transmissions flushed");
 
         // What's next? Even if we're finished, we can't transition to the
         // next state until we're ready to send the OK message.
@@ -714,7 +713,7 @@ impl PollClient for Client {
             let state = state.take();
 
             hand_off_ssh_process(&state.common.handle, state.common.shared.clone(),
-                                 Either::A(state.ssh_tx), state.ssh_rx.into_future());
+                                 state.ssh_tx, state.ssh_rx);
 
             let send = state.cl_tx.send(ServerMessage::Ok);
             transition!(FinalizingOpen {
@@ -771,13 +770,12 @@ impl PollClient for Client {
 // finished the password entry phase.
 
 fn hand_off_ssh_process(
-    handle: &Handle, shared: Arc<Mutex<State>>, _ssh_tx: Either<PtySink, Send<PtySink>>,
-    ssh_rx: StreamFuture<PtyStream>
+    handle: &Handle, shared: Arc<Mutex<State>>, _ssh_tx: PtySink, ssh_rx: PtyStream
 ) {
     //println!("handing off SSH process to monitor");
     let shared2 = shared.clone();
 
-    let ssh_monitor = ssh_rx.into_inner().unwrap().for_each(move |bytes| {
+    let ssh_monitor = ssh_rx.for_each(move |bytes| {
         log!(shared.lock().unwrap(), "SSH: {:?}", bytes);
         Ok(())
     }).map_err(move |err| {
