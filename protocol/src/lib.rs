@@ -13,7 +13,6 @@ extern crate serde_json;
 extern crate tokio_core;
 extern crate tokio_io;
 extern crate tokio_serde_json;
-extern crate tokio_signal;
 extern crate tokio_uds;
 
 use failure::Error;

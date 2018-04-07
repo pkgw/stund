@@ -16,7 +16,6 @@ structopt = "0.2"
 stund_protocol = { path = "protocol", version = "0.1.0" }
 tokio-borrow-stdio = { path = "tokio-borrow-stdio", version = "0.1.0" }
 tokio-core = "0.1"
-tokio-file-unix = "0.4"
 tokio-io = "0.1"
 tokio-pty-process = { path = "tokio-pty-process", version = "0.1.0" }
 tokio-serde-json = { git = "https://github.com/carllerche/tokio-serde-json" }

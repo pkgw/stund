@@ -13,7 +13,6 @@ extern crate libc;
 extern crate stund_protocol;
 extern crate tokio_borrow_stdio;
 extern crate tokio_core;
-extern crate tokio_file_unix;
 extern crate tokio_io;
 extern crate tokio_pty_process;
 extern crate tokio_serde_json;
