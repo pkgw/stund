@@ -4,8 +4,7 @@
 //! Interfacing with the daemon.
 
 use failure::Error;
-use futures::{Async, Future, Poll, Sink, Stream};
-use futures::future::Either;
+use futures::{Async, AsyncSink, Future, Poll, Sink, Stream};
 use futures::sink::Send;
 use futures::stream::StreamFuture;
 use libc;
@@ -109,27 +108,27 @@ enum OpenWorkflow {
 
     #[state_machine_future(transitions(FirstAck, Communicating))]
     FirstAck {
-        ser: Ser,
-        reception: StreamFuture<De>,
+        tx_ssh: Ser,
+        rx_ssh: StreamFuture<De>,
         tx_user: UserOutputSink,
         rx_user: UserInputStream,
     },
 
     #[state_machine_future(transitions(Communicating, CleaningUpIo))]
     Communicating {
+        tx_ssh: Ser,
+        rx_ssh: StreamFuture<De>,
+        tx_user: UserOutputSink,
         rx_user: StreamFuture<UserInputStream>,
-        tx_user: Either<UserOutputSink, Send<UserOutputSink>>,
         user_buf: Vec<u8>,
         finished: FinishCommunicationState,
-        transmission: Either<Ser, Send<Ser>>,
-        reception: StreamFuture<De>,
         buf: Vec<u8>,
     },
 
     #[state_machine_future(transitions(CleaningUpIo, Finished))]
     CleaningUpIo {
-        transmission: Either<Ser, Send<Ser>>,
-        reception: StreamFuture<De>,
+        tx_ssh: Ser,
+        rx_ssh: StreamFuture<De>,
         sent_finished_message: bool,
     },
 
@@ -191,8 +190,8 @@ impl PollOpenWorkflow for OpenWorkflow {
 
         let state = state.take();
         transition!(FirstAck {
-            ser: ser,
-            reception: state.rx_ssh.into_future(),
+            tx_ssh: ser,
+            rx_ssh: state.rx_ssh.into_future(),
             tx_user: state.tx_user,
             rx_user: state.rx_user,
         })
@@ -202,7 +201,7 @@ impl PollOpenWorkflow for OpenWorkflow {
         state: &'a mut RentToOwn<'a, FirstAck>
     ) -> Poll<AfterFirstAck, Error> {
         eprintln!("poll first");
-        let (msg, de) = match state.reception.poll() {
+        let (msg, de) = match state.rx_ssh.poll() {
             Ok(Async::Ready((msg, de))) => (msg, de),
             Ok(Async::NotReady) => {
                 return Ok(Async::NotReady);
@@ -232,11 +231,11 @@ impl PollOpenWorkflow for OpenWorkflow {
 
         transition!(Communicating {
             rx_user: state.rx_user.into_future(),
-            tx_user: Either::A(state.tx_user),
+            tx_user: state.tx_user,
             user_buf: Vec::new(),
             finished: FinishCommunicationState::SawFirstEnter,
-            transmission: Either::A(state.ser),
-            reception: de.into_future(),
+            tx_ssh: state.tx_ssh,
+            rx_ssh: de.into_future(),
             buf: Vec::new(),
         })
     }
@@ -249,7 +248,7 @@ impl PollOpenWorkflow for OpenWorkflow {
         // New text from the daemon?
 
         let de = {
-            let outcome = match state.reception.poll() {
+            let outcome = match state.rx_ssh.poll() {
                 Ok(x) => x,
                 Err((e, _de)) => {
                     eprintln!("e1");
@@ -325,45 +324,59 @@ impl PollOpenWorkflow for OpenWorkflow {
             }
         };
 
-        // Ready/able to send bytes to the daemon?
-
-        let mut state = state.take();
-
-        let transmission = match state.transmission {
-            Either::A(ser) => {
-                if state.buf.len() != 0 {
-                    eprintln!("daemon tx");
-                    let send = ser.send(ClientMessage::UserData(state.buf.clone()));
-                    state.buf.clear();
-                    Either::B(send)
-                } else {
-                    Either::A(ser)
-                }
-            },
-
-            Either::B(mut send) => {
-                Either::A(try_ready!(send.poll()))
-            },
-        };
-
         // Ready/able to send bytes to the user?
 
-        let tx_user = match state.tx_user {
-            Either::A(ser) => {
+        match state.tx_user.poll_complete() {
+            Ok(Async::NotReady) => {},
+
+            Err(e) => { return Err(e.into()); },
+
+            Ok(Async::Ready(())) => {
                 if state.user_buf.len() != 0 {
                     eprintln!("user tx");
-                    let send = ser.send(state.user_buf.clone().into());
-                    state.user_buf.clear();
-                    Either::B(send)
-                } else {
-                    Either::A(ser)
+                    let buf = state.user_buf.clone();
+
+                    match state.tx_user.start_send(buf) {
+                        Ok(AsyncSink::Ready) => {
+                            state.user_buf.clear();
+                        },
+
+                        Err(e) => { return Err(e.into()); },
+
+                        Ok(AsyncSink::NotReady(_)) => {
+                            return Ok(Async::NotReady);
+                        }
+                    }
                 }
             },
+        }
 
-            Either::B(mut send) => {
-                Either::A(try_ready!(send.poll()))
+        // Ready/able to send bytes to the daemon?
+
+        match state.tx_ssh.poll_complete() {
+            Ok(Async::NotReady) => {},
+
+            Err(e) => { return Err(e.into()); },
+
+            Ok(Async::Ready(())) => {
+                if state.buf.len() != 0 {
+                    eprintln!("daemon tx");
+                    let buf = state.buf.clone();
+
+                    match state.tx_ssh.start_send(ClientMessage::UserData(buf)) {
+                        Ok(AsyncSink::Ready) => {
+                            state.buf.clear();
+                        },
+
+                        Err(e) => { return Err(e.into()); },
+
+                        Ok(AsyncSink::NotReady(_)) => {
+                            return Ok(Async::NotReady);
+                        }
+                    }
+                }
             },
-        };
+        }
 
         // Finally ready to figure out what our next step is. It's a bit of a
         // hassle to make sure that we clean up any pending operations
@@ -371,43 +384,38 @@ impl PollOpenWorkflow for OpenWorkflow {
 
         if let FinishCommunicationState::SawSecondEnter = finished {
             eprintln!("finish??");
+            let mut state = state.take();
 
-            let (transmission, sent_finished_message) = match transmission {
-                Either::A(ser) => {
-                    (Either::B(ser.send(ClientMessage::EndOfUserData)), true)
-                },
-
-                other => {
-                    (other, false)
-                },
+            let sent_it = match state.tx_ssh.start_send(ClientMessage::EndOfUserData) {
+                Ok(AsyncSink::Ready) => true,
+                Ok(AsyncSink::NotReady(_)) => false,
+                Err(e) => { return Err(e.into()); },
             };
 
-            let reception = if let Some(de) = de {
+            let rx_ssh = if let Some(de) = de {
                 de.into_future()
             } else {
-                state.reception
+                state.rx_ssh
             };
 
             transition!(CleaningUpIo {
-                transmission: transmission,
-                reception: reception,
-                sent_finished_message: sent_finished_message
+                tx_ssh: state.tx_ssh,
+                rx_ssh: rx_ssh,
+                sent_finished_message: sent_it,
             })
         } else {
             eprintln!("loop");
-            state.transmission = transmission;
             state.finished = finished;
-            state.tx_user = tx_user;
 
             if let Some(de) = de {
-                state.reception = de.into_future();
+                state.rx_ssh = de.into_future();
             }
 
             if let Some(rx_user) = rx_user {
                 state.rx_user = rx_user.into_future();
             }
 
-            transition!(state);
+            Ok(Async::NotReady)
         }
     }
 
@@ -416,27 +424,36 @@ impl PollOpenWorkflow for OpenWorkflow {
     ) -> Poll<AfterCleaningUpIo, Error> {
         // Ready/able/needed to send end-of-data message?
 
-        let mut state = state.take();
+        let msg_flushed = match state.tx_ssh.poll_complete() {
+            Ok(Async::NotReady) => false,
 
-        let (transmission, msg_flushed) = match state.transmission {
-            Either::A(ser) => {
-                if !state.sent_finished_message {
-                    state.sent_finished_message = true;
-                    (Either::B(ser.send(ClientMessage::EndOfUserData)), false)
+            Err(e) => { return Err(e.into()); },
+
+            Ok(Async::Ready(())) => {
+                if state.sent_finished_message {
+                    true
                 } else {
-                    (Either::A(ser), true)
-                }
-            },
+                    match state.tx_ssh.start_send(ClientMessage::EndOfUserData) {
+                        Ok(AsyncSink::Ready) => {
+                            state.sent_finished_message = true;
+                        }
 
-            Either::B(mut send) => {
-                (Either::A(try_ready!(send.poll())), state.sent_finished_message)
+                        Err(e) => { return Err(e.into()); },
+
+                        Ok(AsyncSink::NotReady(_)) => {
+                            return Ok(Async::NotReady);
+                        }
+                    }
+
+                    false
+                }
             },
         };
 
         // New stuff from the daemon?
 
         let (de, got_ok) = {
-            let outcome = match state.reception.poll() {
+            let outcome = match state.rx_ssh.poll() {
                 Ok(x) => x,
                 Err((e, _de)) => {
                     return Err(e.into());
@@ -478,14 +495,10 @@ impl PollOpenWorkflow for OpenWorkflow {
         // What's next?
 
         if msg_flushed && got_ok {
-            if let Either::A(ser) = transmission {
-                transition!(Finished((ser, de.unwrap())))
-            } else {
-                panic!("internal logic failure");
-            }
+            let state = state.take();
+            transition!(Finished((state.tx_ssh, de.unwrap())))
         } else {
-            state.transmission = transmission;
-            transition!(state)
+            Ok(Async::NotReady)
         }
     }
 }

@@ -107,6 +107,7 @@ pub fn borrow_stdio<F, T>(f: F) -> Result<T, Error>
         let rx = rx_stdout_cmd.wait();
 
         for item in rx {
+            eprintln!("stdout item {:?}", item);
             match item {
                 Ok(None) => break,
 
@@ -119,7 +120,7 @@ pub fn borrow_stdio<F, T>(f: F) -> Result<T, Error>
         }
     });
 
-    let wrap_stdout = StdoutSink(Some(Either::A(tx_stdout_cmd.clone())));
+    let wrap_stdout = StdoutSink(tx_stdout_cmd.clone());
 
     // Ready to go.
 
@@ -175,47 +176,24 @@ impl Stream for StdinStream {
 /// The inner storage is as an `Option` to make it so I can move values in and
 /// out of the struct with a reference.
 #[derive(Debug)]
-pub struct StdoutSink(Option<Either<mpsc::Sender<Option<Vec<u8>>>, Send<mpsc::Sender<Option<Vec<u8>>>>>>);
+pub struct StdoutSink(mpsc::Sender<Option<Vec<u8>>>);
 
 impl Sink for StdoutSink {
     type SinkItem = Vec<u8>;
     type SinkError = Error;
 
     fn start_send(&mut self, item: Vec<u8>) -> StartSend<Vec<u8>, Error> {
-        let inner = self.0.take().unwrap();
-
-        if let Either::A(tx) = inner {
-            self.0 = Some(Either::B(tx.send(Some(item))));
-            Ok(AsyncSink::Ready)
-        } else {
-            self.0 = Some(inner);
-            Ok(AsyncSink::NotReady(item))
+        match self.0.start_send(Some(item)) {
+            Err(_) => Err(io::ErrorKind::Other.into()),
+            Ok(AsyncSink::Ready) => Ok(AsyncSink::Ready),
+            Ok(AsyncSink::NotReady(o)) => Ok(AsyncSink::NotReady(o.unwrap())),
         }
     }
 
     fn poll_complete(&mut self) -> Poll<(), Error> {
-        let inner = self.0.take().unwrap();
-
-        if let Either::B(mut send) = inner {
-            match send.poll() {
-                Err(_) => {
-                    self.0 = Some(Either::B(send));
-                    Err(ErrorKind::Other.into())
-                }
-
-                Ok(Async::NotReady) => {
-                    self.0 = Some(Either::B(send));
-                    Ok(Async::NotReady)
-                },
-
-                Ok(Async::Ready(tx)) => {
-                    self.0 = Some(Either::A(tx));
-                    Ok(Async::Ready(()))
-                },
-            }
-        } else {
-            self.0 = Some(inner);
-            Ok(Async::Ready(()))
+        match self.0.poll_complete() {
+            Err(_) => Err(io::ErrorKind::Other.into()),
+            Ok(x) => Ok(x),
         }
     }
 }
