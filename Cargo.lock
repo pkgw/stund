@@ -535,6 +535,28 @@ dependencies = [
 name = "stund"
 version = "0.1.0"
 dependencies = [
+ "atty 0.2.8 (registry+https://github.com/rust-lang/crates.io-index)",
+ "daemonize 0.2.3 (registry+https://github.com/rust-lang/crates.io-index)",
+ "failure 0.1.1 (registry+https://github.com/rust-lang/crates.io-index)",
+ "futures 0.1.21 (registry+https://github.com/rust-lang/crates.io-index)",
+ "libc 0.2.40 (registry+https://github.com/rust-lang/crates.io-index)",
+ "state_machine_future 0.1.6 (registry+https://github.com/rust-lang/crates.io-index)",
+ "structopt 0.2.6 (registry+https://github.com/rust-lang/crates.io-index)",
+ "stund_protocol 0.1.0",
+ "tokio-borrow-stdio 0.1.0",
+ "tokio-core 0.1.16 (registry+https://github.com/rust-lang/crates.io-index)",
+ "tokio-file-unix 0.4.2 (registry+https://github.com/rust-lang/crates.io-index)",
+ "tokio-io 0.1.6 (registry+https://github.com/rust-lang/crates.io-index)",
+ "tokio-pty-process 0.1.0",
+ "tokio-serde-json 0.1.0 (git+https://github.com/carllerche/tokio-serde-json)",
+ "tokio-signal 0.1.5 (registry+https://github.com/rust-lang/crates.io-index)",
+ "tokio-uds 0.1.7 (registry+https://github.com/rust-lang/crates.io-index)",
+]
+
+[[package]]
+name = "stund_protocol"
+version = "0.1.0"
+dependencies = [
  "failure 0.1.1 (registry+https://github.com/rust-lang/crates.io-index)",
  "futures 0.1.21 (registry+https://github.com/rust-lang/crates.io-index)",
  "libc 0.2.40 (registry+https://github.com/rust-lang/crates.io-index)",
@@ -544,28 +566,6 @@ dependencies = [
  "state_machine_future 0.1.6 (registry+https://github.com/rust-lang/crates.io-index)",
  "tokio-core 0.1.16 (registry+https://github.com/rust-lang/crates.io-index)",
  "tokio-io 0.1.6 (registry+https://github.com/rust-lang/crates.io-index)",
- "tokio-serde-json 0.1.0 (git+https://github.com/carllerche/tokio-serde-json)",
- "tokio-signal 0.1.5 (registry+https://github.com/rust-lang/crates.io-index)",
- "tokio-uds 0.1.7 (registry+https://github.com/rust-lang/crates.io-index)",
-]
-
-[[package]]
-name = "stund-cli"
-version = "0.1.0"
-dependencies = [
- "atty 0.2.8 (registry+https://github.com/rust-lang/crates.io-index)",
- "daemonize 0.2.3 (registry+https://github.com/rust-lang/crates.io-index)",
- "failure 0.1.1 (registry+https://github.com/rust-lang/crates.io-index)",
- "futures 0.1.21 (registry+https://github.com/rust-lang/crates.io-index)",
- "libc 0.2.40 (registry+https://github.com/rust-lang/crates.io-index)",
- "state_machine_future 0.1.6 (registry+https://github.com/rust-lang/crates.io-index)",
- "structopt 0.2.6 (registry+https://github.com/rust-lang/crates.io-index)",
- "stund 0.1.0",
- "tokio-borrow-stdio 0.1.0",
- "tokio-core 0.1.16 (registry+https://github.com/rust-lang/crates.io-index)",
- "tokio-file-unix 0.4.2 (registry+https://github.com/rust-lang/crates.io-index)",
- "tokio-io 0.1.6 (registry+https://github.com/rust-lang/crates.io-index)",
- "tokio-pty-process 0.1.0",
  "tokio-serde-json 0.1.0 (git+https://github.com/carllerche/tokio-serde-json)",
  "tokio-signal 0.1.5 (registry+https://github.com/rust-lang/crates.io-index)",
  "tokio-uds 0.1.7 (registry+https://github.com/rust-lang/crates.io-index)",

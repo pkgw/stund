@@ -24,7 +24,7 @@ use std::os::unix::net::{SocketAddr, UnixStream as StdUnixStream};
 use std::path::PathBuf;
 use std::process::ExitStatus;
 use std::sync::{Arc, Mutex};
-use stund::protocol::*;
+use stund_protocol::*;
 use tokio_core::reactor::{Core, Handle, Remote}; // TODO: tokio_core is deprecated
 use tokio_io::AsyncRead;
 use tokio_io::codec::length_delimited::{FramedRead, FramedWrite};

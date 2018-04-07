@@ -1,5 +1,5 @@
 [package]
-name = "stund-cli"
+name = "stund"
 version = "0.1.0"
 authors = ["Peter Williams <peter@newton.cx>"]
 
@@ -13,7 +13,7 @@ futures = "0.1"
 libc = "0.2"
 state_machine_future = "0.1"
 structopt = "0.2"
-stund = { path = "stund", version = "0.1.0" }
+stund_protocol = { path = "protocol", version = "0.1.0" }
 tokio-borrow-stdio = { path = "tokio-borrow-stdio", version = "0.1.0" }
 tokio-core = "0.1"
 tokio-file-unix = "0.4"

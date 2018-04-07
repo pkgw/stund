@@ -10,7 +10,7 @@ extern crate daemonize;
 extern crate libc;
 #[macro_use] extern crate state_machine_future;
 #[macro_use] extern crate structopt;
-extern crate stund;
+extern crate stund_protocol;
 extern crate tokio_borrow_stdio;
 extern crate tokio_core;
 extern crate tokio_file_unix;
@@ -25,11 +25,10 @@ use std::io;
 use std::mem;
 use std::process;
 use structopt::StructOpt;
-use stund::protocol::OpenParameters;
-use stund::protocol::client::Connection;
+use stund_protocol::OpenParameters;
+use stund_protocol::client::Connection;
 
 mod daemon;
-//mod new;
 
 
 #[derive(Debug, StructOpt)]
