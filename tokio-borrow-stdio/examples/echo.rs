@@ -7,7 +7,7 @@ extern crate futures;
 extern crate tokio_borrow_stdio;
 extern crate tokio_core;
 
-use futures::{Future, Sink};
+use futures::Future;
 use futures::stream::Stream;
 use std::str;
 use tokio_core::reactor::Core;

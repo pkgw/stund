@@ -11,20 +11,24 @@ extern crate libc;
 #[macro_use] extern crate state_machine_future;
 #[macro_use] extern crate structopt;
 extern crate stund;
+extern crate tokio_borrow_stdio;
 extern crate tokio_core;
+extern crate tokio_file_unix;
 extern crate tokio_io;
 extern crate tokio_pty_process;
 extern crate tokio_serde_json;
 extern crate tokio_signal;
-extern crate tokio_stdin;
 extern crate tokio_uds;
 
 use failure::Error;
+use std::io;
 use std::process;
 use structopt::StructOpt;
+use stund::protocol::OpenParameters;
+use stund::protocol::client::Connection;
 
 mod daemon;
-mod new;
+//mod new;
 
 
 #[derive(Debug, StructOpt)]
@@ -66,7 +70,20 @@ pub struct StundOpenOptions {
 
 impl StundOpenOptions {
     fn cli(self) -> Result<i32, Error> {
-        new::new_open(self)?;
+        let params = OpenParameters { host: self.host.clone() };
+
+        eprintln!("estab");
+        let mut conn = Connection::establish()?;
+
+        conn = tokio_borrow_stdio::borrow_stdio(|stdin, stdout| {
+            eprintln!("inner");
+            conn.send_open(params, Box::new(stdout), Box::new(stdin))
+                .map_err(|_| io::ErrorKind::Other.into())
+        })?;
+
+        eprintln!("done");
+        conn.close()?;
+
         Ok(0)
     }
 }

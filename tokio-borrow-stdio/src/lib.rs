@@ -12,7 +12,6 @@ extern crate tokio_io;
 use futures::{Async, AsyncSink, Future, Poll, Sink, StartSend, Stream};
 use futures::future::{Either, Loop};
 use futures::sink::Send;
-use futures::stream::{StreamFuture, Wait};
 use futures::sync::{mpsc, oneshot};
 use std::io::{self, Error, ErrorKind, Read, Write};
 use std::thread;
@@ -27,14 +26,6 @@ struct StdinState<'a> {
     stdin_lock: io::StdinLock<'a>,
     tx_stdin_data: Either<mpsc::Sender<StdioPacket>, Send<mpsc::Sender<StdioPacket>>>,
     rx_stdin_stop: oneshot::Receiver<()>,
-}
-
-#[derive(Debug)]
-struct StdoutState<'a> {
-    first: bool,
-    stdout_lock: io::StdoutLock<'a>,
-    //stdout_data_iter: Wait<mpsc::Receiver<Vec<u8>>>,
-    rx_stdout_stop: oneshot::Receiver<()>,
 }
 
 
@@ -111,74 +102,26 @@ pub fn borrow_stdio<F, T>(f: F) -> Result<T, Error>
     let (tx_stdout_cmd, rx_stdout_cmd) = mpsc::channel::<Option<Vec<u8>>>(8);
 
     thread::spawn(move || {
-        let mut core = Core::new().expect("couldn't create core");
-
         let stdout = io::stdout();
         let mut stdout_lock = stdout.lock();
-        let mut rx = rx_stdout_cmd;
+        let rx = rx_stdout_cmd.wait();
 
-        loop {
-            let newrx = match core.run(rx.into_future()) {
-                Ok((None, _rx)) => break,
+        for item in rx {
+            match item {
+                Ok(None) => break,
 
-                Ok((Some(None), _rx)) => break,
-
-                Ok((Some(Some(data)), rx)) => {
+                Ok(Some(data)) => {
                     let _r = stdout_lock.write(&data);
-                    rx
                 },
 
-                Err((_, rx)) => rx,
+                Err(_) => {},
             };
-
-            rx = newrx;
         }
     });
 
-    //thread::spawn(move || {
-    //    let mut core = Core::new().expect("couldn't create core");
-    //
-    //    let stdout = io::stdout();
-    //    let stdout_lock = stdout.lock();
-    //
-    //    let state = StdoutState {
-    //        first: true,
-    //        stdout_lock: stdout_lock,
-    //        //stdout_data_iter: rx_stdout_data.wait(),
-    //        rx_stdout_stop: rx_stdout_stop,
-    //    };
-    //
-    //    let write_blocking = futures::future::loop_fn(state, |mut state| -> Result<Loop<(), StdoutState>, ()> {
-    //        if state.first {
-    //            println!("WR first");
-    //            state.first = false;
-    //            return Ok(Loop::Continue(state));
-    //        }
-    //
-    //        println!("WR stop");
-    //        if let Ok(Async::NotReady) = state.rx_stdout_stop.poll() {
-    //        } else {
-    //            return Ok(Loop::Break(()));
-    //        }
-    //
-    //        Ok(Loop::Break(()))
-    //        //println!("WR data");
-    //        //match state.stdout_data_iter.next() {
-    //        //    None => Ok(Loop::Break(())),
-    //        //
-    //        //    Some(Ok(data)) =>  {
-    //        //        let _r = state.stdout_lock.write(&data);
-    //        //        Ok(Loop::Continue(state))
-    //        //    },
-    //        //
-    //        //    Some(Err(e)) =>  Ok(Loop::Continue(state)),
-    //        //}
-    //    });
-    //
-    //    let _r = core.run(write_blocking);
-    //});
-
     let wrap_stdout = StdoutSink(Some(Either::A(tx_stdout_cmd.clone())));
+
+    // Ready to go.
 
     let r = f(wrap_stdin, wrap_stdout);
     let _r = tx_stdin_stop.send(()); // can't react usefully if these fail

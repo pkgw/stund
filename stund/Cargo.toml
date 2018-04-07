@@ -15,6 +15,5 @@ tokio-core = "0.1"
 tokio-io = "0.1"
 tokio-serde-json = { git = "https://github.com/carllerche/tokio-serde-json" }
 tokio-signal = "0.1"
-tokio-stdin = "0.1"
 tokio-uds = "0.1"
 

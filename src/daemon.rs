@@ -49,7 +49,6 @@ const FATAL_SIGNALS: &[i32] = &[
     libc::SIGILL,
     libc::SIGINT,
     libc::SIGKILL,
-    libc::SIGPIPE,
     libc::SIGQUIT,
     libc::SIGTERM,
     libc::SIGTRAP,
