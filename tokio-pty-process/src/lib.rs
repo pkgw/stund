@@ -3,7 +3,7 @@
 extern crate futures;
 extern crate libc;
 extern crate mio;
-extern crate tokio_core; // TODO: migate to just `tokio`; blocking on `tokio_signal`.
+extern crate tokio_core; // TODO: migrate to just `tokio`; blocking on `tokio_signal`.
 extern crate tokio_io;
 extern crate tokio_signal;
 

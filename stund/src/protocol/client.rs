@@ -114,15 +114,15 @@ enum OpenWorkflow {
         rx_user: UserInputStream,
     },
 
-    #[state_machine_future(transitions(Communicating, CleaningUpIo))]
+    #[state_machine_future(transitions(CleaningUpIo))]
     Communicating {
         tx_ssh: Ser,
-        rx_ssh: StreamFuture<De>,
+        rx_ssh: De,
         tx_user: UserOutputSink,
-        rx_user: StreamFuture<UserInputStream>,
+        rx_user: UserInputStream,
         user_buf: Vec<u8>,
         finished: FinishCommunicationState,
-        buf: Vec<u8>,
+        ssh_buf: Vec<u8>,
     },
 
     #[state_machine_future(transitions(CleaningUpIo, Finished))]
@@ -230,13 +230,13 @@ impl PollOpenWorkflow for OpenWorkflow {
         let state = state.take();
 
         transition!(Communicating {
-            rx_user: state.rx_user.into_future(),
+            rx_user: state.rx_user,
             tx_user: state.tx_user,
             user_buf: Vec::new(),
             finished: FinishCommunicationState::SawFirstEnter,
             tx_ssh: state.tx_ssh,
-            rx_ssh: de.into_future(),
-            buf: Vec::new(),
+            rx_ssh: de,
+            ssh_buf: Vec::new(),
         })
     }
 
@@ -247,142 +247,114 @@ impl PollOpenWorkflow for OpenWorkflow {
 
         // New text from the daemon?
 
-        let de = {
-            let outcome = match state.rx_ssh.poll() {
-                Ok(x) => x,
-                Err((e, _de)) => {
-                    eprintln!("e1");
-                    return Err(e.into());
+        let outcome = match state.rx_ssh.poll() {
+            Ok(x) => x,
+            Err(e) => {
+                eprintln!("e1");
+                return Err(e.into());
+            },
+        };
+
+        if let Async::Ready(msg) = outcome {
+            eprintln!("something from SSH: {:?}", msg);
+
+            match msg {
+                Some(ServerMessage::SshData(data)) => {
+                    eprintln!("ssh data");
+                    state.user_buf.extend_from_slice(&data);
                 },
-            };
 
-            eprintln!("something from SSH");
-
-            if let Async::Ready((msg, de)) = outcome {
-                match msg {
-                    Some(ServerMessage::SshData(data)) => {
-                        eprintln!("ssh data");
-                        state.user_buf.extend_from_slice(&data);
-                    },
-
-                    Some(ServerMessage::Error(e)) => {
-                        //println!("");
-                        eprintln!("e2");
-                        return Err(format_err!("{}", e));
-                    }
-
-                    Some(other) => {
-                        //println!("");
-                        eprintln!("e3");
-                        return Err(format_err!("unexpected message from the daemon: {:?}", other));
-                    },
-
-                    None => {},
+                Some(ServerMessage::Error(e)) => {
+                    //println!("");
+                    eprintln!("e2");
+                    return Err(format_err!("{}", e));
                 }
 
-                Some(de)
-            } else {
-                None
+                Some(other) => {
+                    //println!("");
+                    eprintln!("e3");
+                    return Err(format_err!("unexpected message from the daemon: {:?}", other));
+                },
+
+                None => {},
             }
-        };
+        }
 
         // New text from the user?
 
-        let (rx_user, finished) = {
-            let outcome = match state.rx_user.poll() {
-                Ok(x) => x,
-                Err((_, _rx_user)) => {
-                    eprintln!("e4");
-                    return Err(format_err!("error reading from the terminal"));
-                },
-            };
-
-            if let Async::Ready((bytes, rx_user)) = outcome {
-                let finished = match bytes {
-                    None => {
-                        return Err(format_err!("EOF on terminal (?)"));
-                    },
-
-                    Some(b) => {
-                        eprintln!("user data");
-                        state.buf.extend_from_slice(&b);
-
-                        let mut t = state.finished;
-
-                        for single_byte in &b {
-                            t = t.transition(*single_byte);
-                        }
-
-                        t
-                    },
-
-                };
-
-                (Some(rx_user), finished)
-            } else {
-                (None, state.finished)
-            }
+        let outcome = match state.rx_user.poll() {
+            Ok(x) => x,
+            Err(_) => {
+                eprintln!("e4");
+                return Err(format_err!("error reading from the terminal"));
+            },
         };
+
+        if let Async::Ready(bytes) = outcome {
+            match bytes {
+                None => {
+                    return Err(format_err!("EOF on terminal (?)"));
+                },
+
+                Some(b) => {
+                    eprintln!("user data");
+                    state.ssh_buf.extend_from_slice(&b);
+
+                    let mut t = state.finished;
+
+                    for single_byte in &b {
+                        t = t.transition(*single_byte);
+                    }
+
+                    state.finished = t;
+                }
+            }
+        }
 
         // Ready/able to send bytes to the user?
 
-        match state.tx_user.poll_complete() {
-            Ok(Async::NotReady) => {},
+        if state.user_buf.len() != 0 {
+            eprintln!("user tx");
+            let buf = state.user_buf.clone();
 
-            Err(e) => { return Err(e.into()); },
+            match state.tx_user.start_send(buf) {
+                Ok(AsyncSink::Ready) => {
+                    state.user_buf.clear();
+                },
 
-            Ok(Async::Ready(())) => {
-                if state.user_buf.len() != 0 {
-                    eprintln!("user tx");
-                    let buf = state.user_buf.clone();
+                Err(e) => { return Err(e.into()); },
 
-                    match state.tx_user.start_send(buf) {
-                        Ok(AsyncSink::Ready) => {
-                            state.user_buf.clear();
-                        },
-
-                        Err(e) => { return Err(e.into()); },
-
-                        Ok(AsyncSink::NotReady(_)) => {
-                            return Ok(Async::NotReady);
-                        }
-                    }
-                }
-            },
+                Ok(AsyncSink::NotReady(_)) => {}
+            }
         }
 
         // Ready/able to send bytes to the daemon?
 
-        match state.tx_ssh.poll_complete() {
-            Ok(Async::NotReady) => {},
+        if state.ssh_buf.len() != 0 {
+            eprintln!("daemon tx");
+            let buf = state.ssh_buf.clone();
 
-            Err(e) => { return Err(e.into()); },
+            match state.tx_ssh.start_send(ClientMessage::UserData(buf)) {
+                Ok(AsyncSink::Ready) => {
+                    state.ssh_buf.clear();
+                },
 
-            Ok(Async::Ready(())) => {
-                if state.buf.len() != 0 {
-                    eprintln!("daemon tx");
-                    let buf = state.buf.clone();
+                Err(e) => { return Err(e.into()); },
 
-                    match state.tx_ssh.start_send(ClientMessage::UserData(buf)) {
-                        Ok(AsyncSink::Ready) => {
-                            state.buf.clear();
-                        },
-
-                        Err(e) => { return Err(e.into()); },
-
-                        Ok(AsyncSink::NotReady(_)) => {
-                            return Ok(Async::NotReady);
-                        }
-                    }
-                }
-            },
+                Ok(AsyncSink::NotReady(_)) => {}
+            }
         }
+
+        // Flushing out our transmissions is highest priority.
+
+        try_ready!(state.tx_user.poll_complete());
+        try_ready!(state.tx_ssh.poll_complete());
 
         // Finally ready to figure out what our next step is. It's a bit of a
         // hassle to make sure that we clean up any pending operations
         // gracefully.
 
-        if let FinishCommunicationState::SawSecondEnter = finished {
+        if let FinishCommunicationState::SawSecondEnter = state.finished {
             eprintln!("finish??");
             let mut state = state.take();
 
@@ -392,29 +364,13 @@ impl PollOpenWorkflow for OpenWorkflow {
                 Err(e) => { return Err(e.into()); },
             };
 
-            let rx_ssh = if let Some(de) = de {
-                de.into_future()
-            } else {
-                state.rx_ssh
-            };
-
             transition!(CleaningUpIo {
                 tx_ssh: state.tx_ssh,
-                rx_ssh: rx_ssh,
+                rx_ssh: state.rx_ssh.into_future(),
                 sent_finished_message: sent_it,
             })
         } else {
             eprintln!("loop");
-            state.finished = finished;
-
-            if let Some(de) = de {
-                state.rx_ssh = de.into_future();
-            }
-
-            if let Some(rx_user) = rx_user {
-                state.rx_user = rx_user.into_future();
-            }
-
             Ok(Async::NotReady)
         }
     }

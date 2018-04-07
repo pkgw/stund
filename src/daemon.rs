@@ -5,7 +5,7 @@
 
 use daemonize;
 use failure::{Error, ResultExt};
-use futures::{Async, Future, Poll, Sink, Stream};
+use futures::{Async, AsyncSink, Future, Poll, Sink, Stream};
 use futures::future::Either;
 use futures::sink::Send;
 use futures::stream::{SplitSink, SplitStream, StreamFuture};
@@ -390,7 +390,7 @@ fn process_client(
         _tx_exit: Some(tx_exit),
     };
 
-    let wrapped = Client::start(common, ser, de.into_future()).map(move |(_common, _ser, _de)| {
+    let wrapped = Client::start(common, ser, de).map(move |(_common, _ser, _de)| {
         log!(shared2.lock().unwrap(), "client session finished");
     }).map_err(move |err| {
         log!(shared3.lock().unwrap(), "error from client session: {:?}", err);
@@ -420,7 +420,7 @@ enum Client {
     AwaitingCommand {
         common: ClientCommonState,
         tx: Ser,
-        rx: StreamFuture<De>,
+        rx: De,
     },
 
     #[state_machine_future(transitions(PollSendSshSpawn))]
@@ -450,11 +450,11 @@ enum Client {
     #[state_machine_future(transitions(Aborting, CommunicatingForOpen, FinalizingOpen))]
     CommunicatingForOpen {
         common: ClientCommonState,
-        cl_tx: Either<Ser, Send<Ser>>,
-        cl_rx: StreamFuture<De>,
+        cl_tx: Ser,
+        cl_rx: De,
         cl_buf: Vec<u8>,
-        ssh_tx: Either<PtySink, Send<PtySink>>,
-        ssh_rx: StreamFuture<PtyStream>,
+        ssh_tx: PtySink,
+        ssh_rx: PtyStream,
         ssh_buf: Vec<u8>,
         ssh_die: StreamFuture<Receiver<Option<ExitStatus>>>,
         saw_end: bool,
@@ -464,7 +464,7 @@ enum Client {
     FinalizingOpen {
         common: ClientCommonState,
         tx: Send<Ser>,
-        rx: StreamFuture<De>,
+        rx: De,
     },
 
     #[state_machine_future(ready)]
@@ -487,22 +487,13 @@ impl PollClient for Client {
     fn poll_awaiting_command<'a>(
         state: &'a mut RentToOwn<'a, AwaitingCommand>
     ) -> Poll<AfterAwaitingCommand, Error> {
-        let (msg, de) = match state.rx.poll() {
-            Ok(Async::Ready((msg, de))) => (msg, de),
-            Ok(Async::NotReady) => {
-                return Ok(Async::NotReady);
-            },
-            Err((e, _de)) => {
-                return Err(e.into());
-            }
-        };
-
+        let msg = try_ready!(state.rx.poll());
         let state = state.take();
 
         match msg {
             None => {
                 // Stream ended. (= connection closed?)
-                transition!(Finished((state.common, state.tx, de)));
+                transition!(Finished((state.common, state.tx, state.rx)));
             },
 
             Some(ClientMessage::Open(params)) => {
@@ -514,17 +505,17 @@ impl PollClient for Client {
                     common: state.common,
                     params: params,
                     cl_tx: state.tx,
-                    cl_rx: de,
+                    cl_rx: state.rx,
                 });
             },
 
             Some(ClientMessage::Exit) => {
                 println!("XXX handle exit");
-                transition!(Finished((state.common, state.tx, de)));
+                transition!(Finished((state.common, state.tx, state.rx)));
             },
 
             Some(ClientMessage::Goodbye) => {
-                transition!(Finished((state.common, state.tx, de)));
+                transition!(Finished((state.common, state.tx, state.rx)));
             },
 
             Some(other) => {
@@ -593,15 +584,20 @@ impl PollClient for Client {
         let res = try_ready!(state.rx_ssh_ready.poll());
         //println!("transitioning to communication");
         let new_ssh_info = res?;
-        let state = state.take();
+        let mut state = state.take();
+
+        if let Ok(AsyncSink::Ready) = state.cl_tx.start_send(ServerMessage::Ok) {
+        } else {
+            panic!("cmon");
+        }
 
         transition!(CommunicatingForOpen {
             common: state.common,
-            cl_tx: Either::B(state.cl_tx.send(ServerMessage::Ok)),
-            cl_rx: state.cl_rx.into_future(),
+            cl_tx: state.cl_tx,
+            cl_rx: state.cl_rx,
             cl_buf: Vec::new(),
-            ssh_tx: Either::A(new_ssh_info.ptywrite),
-            ssh_rx: new_ssh_info.ptyread.into_future(),
+            ssh_tx: new_ssh_info.ptywrite,
+            ssh_rx: new_ssh_info.ptyread,
             ssh_buf: Vec::new(),
             ssh_die: new_ssh_info.rx_die.into_future(),
             saw_end: false,
@@ -617,138 +613,119 @@ impl PollClient for Client {
     ) -> Poll<AfterCommunicatingForOpen, Error> {
         // New text from the user?
 
-        let de = {
-            let outcome = match state.cl_rx.poll() {
-                Ok(x) => x,
-                Err((e, _de)) => {
-                    return Err(e.into());
-                },
-            };
-
-            if let Async::Ready((msg, de)) = outcome {
-                match msg {
-                    Some(ClientMessage::UserData(data)) => {
-                        if state.saw_end {
-                            return Err(format_err!("client changed its mind about being finished"));
-                        }
-
-                        state.ssh_buf.extend_from_slice(&data);
-                    },
-
-                    Some(ClientMessage::EndOfUserData) => {
-                        state.saw_end = true;
-                    },
-
-                    Some(other) => {
-                        // Could consider aborting here, but if we didn't
-                        // understand the client then probably there's
-                        // something messed up about the channel.
-                        return Err(format_err!("unexpected message from the client: {:?}", other));
-                    },
-
-                    None => {},
-                }
-
-                Some(de)
-            } else {
-                None
-            }
+        let outcome = match state.cl_rx.poll() {
+            Ok(x) => x,
+            Err(e) => {
+                return Err(e.into());
+            },
         };
+
+        if let Async::Ready(msg) = outcome {
+            eprintln!("client message: {:?}", msg);
+
+            match msg {
+                Some(ClientMessage::UserData(data)) => {
+                    if state.saw_end {
+                        return Err(format_err!("client changed its mind about being finished"));
+                    }
+
+                    state.ssh_buf.extend_from_slice(&data);
+                },
+
+                Some(ClientMessage::EndOfUserData) => {
+                    state.saw_end = true;
+                },
+
+                Some(other) => {
+                    // Could consider aborting here, but if we didn't
+                    // understand the client then probably there's
+                    // something messed up about the channel.
+                    return Err(format_err!("unexpected message from the client: {:?}", other));
+                },
+
+                None => {},
+            }
+        }
 
         // New text from SSH?
 
-        let rcvr = {
-            let outcome = match state.ssh_rx.poll() {
-                Ok(x) => x,
-                Err((_, _stdin)) => {
-                    let msg = format!("something went wrong communicating with the SSH process");
-                    let mut state = state.take();
-                    let rx = if let Some(updated) = de {
-                        updated.into_either_rx()
-                    } else {
-                        state.cl_rx.into_either_rx()
-                    };
-                    transition!(abort_client(state.common, state.cl_tx, rx, msg));
-                },
-            };
-
-            if let Async::Ready((bytes, stdin)) = outcome {
-                if let Some(b) = bytes {
-                    state.cl_buf.extend_from_slice(&b);
-                }
-
-                Some(stdin)
-            } else {
-                None
-            }
+        let outcome = match state.ssh_rx.poll() {
+            Ok(x) => x,
+            Err(e) => {
+                let msg = format!("something went wrong communicating with the SSH process: {}", e);
+                let mut state = state.take();
+                transition!(abort_client(state.common, state.cl_tx, state.cl_rx, msg));
+            },
         };
+
+        if let Async::Ready(bytes) = outcome {
+            eprintln!("SSH data");
+
+            if let Some(b) = bytes {
+                state.cl_buf.extend_from_slice(&b);
+            }
+        }
 
         // Ready/able to send bytes to the client?
 
-        let mut state = state.take();
+        if state.cl_buf.len() != 0 {
+            eprintln!("sending to client");
+            let buf = state.cl_buf.clone();
 
-        let cl_tx = match state.cl_tx {
-            Either::A(ser) => {
-                if state.cl_buf.len() != 0 {
-                    let send = ser.send(ServerMessage::SshData(state.cl_buf.clone()));
+            match state.cl_tx.start_send(ServerMessage::SshData(buf)) {
+                Ok(AsyncSink::Ready) => {
                     state.cl_buf.clear();
-                    Either::B(send)
-                } else {
-                    Either::A(ser)
-                }
-            },
+                },
 
-            Either::B(mut send) => {
-                Either::A(try_ready!(send.poll()))
-            },
-        };
+                Err(e) => { return Err(e.into()); },
+
+                Ok(AsyncSink::NotReady(_)) => {}
+            }
+        }
 
         // Ready/able to send bytes to SSH?
 
-        let ssh_tx = match state.ssh_tx {
-            Either::A(ser) => {
-                if state.ssh_buf.len() != 0 {
-                    let send = ser.send(state.ssh_buf.clone().into());
-                    state.ssh_buf.clear();
-                    Either::B(send)
-                } else {
-                    Either::A(ser)
-                }
-            },
+        if state.ssh_buf.len() != 0 {
+            eprintln!("sending to SSH");
+            let buf = state.ssh_buf.clone();
 
-            Either::B(mut send) => {
-                Either::A(try_ready!(send.poll()))
-            },
-        };
+            match state.ssh_tx.start_send(buf.into()) {
+                Ok(AsyncSink::Ready) => {
+                    state.ssh_buf.clear();
+                },
+
+                Err(e) => { return Err(e.into()); },
+
+                Ok(AsyncSink::NotReady(_)) => {}
+            }
+        }
+
+        // Flushing transmissions is highest priority
+
+        eprintln!("comm");
+        try_ready!(state.cl_tx.poll_complete());
+        try_ready!(state.ssh_tx.poll_complete());
 
         // What's next? Even if we're finished, we can't transition to the
         // next state until we're ready to send the OK message.
 
-        if let Some(rcvr) = rcvr {
-            state.ssh_rx = rcvr.into_future();
-        }
-
-        if let Some(de) = de {
-            state.cl_rx = de.into_future();
-        }
-
         if state.saw_end {
-            if let Either::A(ser) = cl_tx {
-                hand_off_ssh_process(&state.common.handle, state.common.shared.clone(),
-                                     ssh_tx, state.ssh_rx);
+            eprintln!("ready to move on");
+            let state = state.take();
 
-                let send = ser.send(ServerMessage::Ok);
-                transition!(FinalizingOpen {
-                    common: state.common,
-                    tx: send,
-                    rx: state.cl_rx,
-                });
-            }
+            hand_off_ssh_process(&state.common.handle, state.common.shared.clone(),
+                                 Either::A(state.ssh_tx), state.ssh_rx.into_future());
+
+            let send = state.cl_tx.send(ServerMessage::Ok);
+            transition!(FinalizingOpen {
+                common: state.common,
+                tx: send,
+                rx: state.cl_rx,
+            });
         }
 
-        state.cl_tx = cl_tx;
-        state.ssh_tx = ssh_tx;
-        transition!(state);
+        eprintln!("not ready in the end");
+        Ok(Async::NotReady)
     }
 
     /// OMG, we actually started SSH successfully. Once we make sure that the

@@ -107,12 +107,12 @@ pub fn borrow_stdio<F, T>(f: F) -> Result<T, Error>
         let rx = rx_stdout_cmd.wait();
 
         for item in rx {
-            eprintln!("stdout item {:?}", item);
             match item {
                 Ok(None) => break,
 
                 Ok(Some(data)) => {
                     let _r = stdout_lock.write(&data);
+                    let _r = stdout_lock.flush();
                 },
 
                 Err(_) => {},
