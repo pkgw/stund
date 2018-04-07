@@ -62,6 +62,9 @@ pub struct StundOpenOptions {
     #[structopt(help = "The host for which the tunnel should be opened.")]
     host: String,
 
+    #[structopt(short = "q", long = "quiet", help = "Suppress low-importance UI messages.")]
+    quiet: bool,
+
     // TODO? keepalive option/config setting for tunnels that can/should be
     // restarted by the daemon if the SSH process dies; i.e. ones that do not
     // need interactive authentication to establish.
@@ -73,7 +76,9 @@ impl StundOpenOptions {
 
         let conn = Connection::establish(true)?;
 
-        println!("[Log in and type \".\" on its own line when finished.]");
+        if !self.quiet {
+            println!("[Log in and type \".\" on its own line when finished.]");
+        }
 
         toggle_terminal_echo(false);
         let r = tokio_borrow_stdio::borrow_stdio(|stdin, stdout| {
@@ -85,7 +90,9 @@ impl StundOpenOptions {
         let (result, conn) = r?;
 
         if let OpenResult::AlreadyOpen = result {
-            println!("[Tunnel is already open.]");
+            if !self.quiet {
+                println!("[Tunnel is already open.]");
+            }
         }
 
         conn.close()?;
