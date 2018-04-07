@@ -194,8 +194,8 @@ impl State {
                 // Now actually launch the SSH process.
 
                 let child = process::Command::new("ssh")
-                    .arg("-N")
                     .arg(&params.host)
+                    .arg("echo \"[Login completed successfully.]\" && tail -f /dev/null")
                     .env_remove("DISPLAY")
                     .spawn_pty_async(&ptymaster, &handle2).context("failed to launch SSH")?;
 

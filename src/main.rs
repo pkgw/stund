@@ -85,8 +85,6 @@ impl StundOpenOptions {
         toggle_terminal_echo(true);
 
         conn = r?;
-        println!("[Success!]");
-
         conn.close()?;
         Ok(0)
     }
