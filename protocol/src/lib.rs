@@ -41,6 +41,9 @@ pub enum ClientMessage {
     /// Close an existing tunnel.
     Close(CloseParameters),
 
+    /// Ask the daemon about its status.
+    QueryStatus,
+
     /// Tell the daemon to exit
     Exit,
 
@@ -69,6 +72,10 @@ pub enum ServerMessage {
     /// In response to a `Close` message, indicates that no such tunnel was
     /// open.
     TunnelNotOpen,
+
+    /// In response to a `QueryStatus` message, information about the server
+    /// status.
+    StatusResponse(StatusInformation),
 }
 
 
@@ -93,4 +100,23 @@ pub struct CloseParameters {
 pub enum CloseResult {
     Success,
     NotOpen
+}
+
+
+#[derive(Debug, Deserialize, PartialEq, Serialize)]
+pub struct StatusInformation {
+    pub tunnels: Vec<TunnelInformation>,
+}
+
+#[derive(Debug, Deserialize, PartialEq, Serialize)]
+pub struct TunnelInformation {
+    pub host: String,
+    pub state: TunnelState,
+}
+
+#[derive(Debug, Deserialize, PartialEq, Serialize)]
+pub enum TunnelState {
+    Open,
+    Closed,
+    Died,
 }

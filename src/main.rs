@@ -148,6 +148,39 @@ impl StundOpenOptions {
 
 
 #[derive(Debug, StructOpt)]
+pub struct StundStatusOptions {
+}
+
+impl StundStatusOptions {
+    fn cli(self) -> Result<i32, Error> {
+        let conn = Connection::establish()?;
+        let (info, conn) = conn.query_status()?;
+        conn.close()?;
+
+        if info.tunnels.len() == 0 {
+            println!("No tunnels are open.");
+        } else {
+            let mut longest = 4; // "Host"
+
+
+            for tun in &info.tunnels {
+                longest = longest.max(tun.host.len());
+            }
+
+            println!("{:1$}  Status", "Host", longest);
+            println!("");
+
+            for tun in &info.tunnels {
+                println!("{0:1$}  {2:?}", tun.host, longest, tun.state);
+            }
+        }
+
+        Ok(0)
+    }
+}
+
+
+#[derive(Debug, StructOpt)]
 #[structopt(name = "stund", about = "Maintain SSH tunnels in the background.")]
 pub enum StundCli {
     #[structopt(name = "close")]
@@ -165,6 +198,10 @@ pub enum StundCli {
     #[structopt(name = "open")]
     /// Open a new SSH tunnel
     Open(StundOpenOptions),
+
+    #[structopt(name = "status")]
+    /// Get information about known SSH tunnels
+    Status(StundStatusOptions),
 }
 
 impl StundCli {
@@ -174,6 +211,7 @@ impl StundCli {
             StundCli::Daemon(opts) => opts.cli(),
             StundCli::Exit(opts) => opts.cli(),
             StundCli::Open(opts) => opts.cli(),
+            StundCli::Status(opts) => opts.cli(),
         }
     }
 }

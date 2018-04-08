@@ -206,7 +206,7 @@ enum TunnelState {
     /// `None`, we explicitly killed it; otherwise, it's whatever status the
     /// process died with.
     Exited {
-        _status: Option<ExitStatus>,
+        status: Option<ExitStatus>,
     },
 }
 
@@ -252,7 +252,7 @@ impl PollChildMonitor for ChildMonitor {
                 {
                     let mut sh = state.shared.lock().unwrap();
                     log!(sh, "SSH child for {} unexpectedly died: {:?}", state.key, status);
-                    sh.children.insert(state.key, TunnelState::Exited { _status: Some(status) });
+                    sh.children.insert(state.key, TunnelState::Exited { status: Some(status) });
                 }
                 state.rx_kill.close();
                 transition!(NotifyingChildDied {
@@ -274,7 +274,7 @@ impl PollChildMonitor for ChildMonitor {
                 {
                     let mut sh = state.shared.lock().unwrap();
                     log!(sh, "ordered to kill SSH child for {}", state.key);
-                    sh.children.insert(state.key, TunnelState::Exited { _status: None });
+                    sh.children.insert(state.key, TunnelState::Exited { status: None });
                 }
                 let _r = state.child.kill(); // can't do anything if this fails
                 state.rx_kill.close();
@@ -465,6 +465,10 @@ impl PollClient for Client {
 
             Some(ClientMessage::Goodbye) => {
                 transition!(Finished((state.common, state.tx, state.rx)));
+            },
+
+            Some(ClientMessage::QueryStatus) => {
+                return process_status_query(state.common, state.tx, state.rx);
             },
 
             Some(other) => {
@@ -772,6 +776,31 @@ fn process_close_command(
     }
 
     let send = tx.send(ServerMessage::Ok);
+    transition!(FinalizingTxn { common, tx: send, rx });
+}
+
+
+fn process_status_query(
+    common: ClientCommonState, tx: Ser, rx: De
+) -> Poll<AfterAwaitingCommand, Error> {
+    let mut info = StatusInformation {
+        tunnels: Vec::new(),
+    };
+
+    for (host, tinfo) in common.shared().children.iter() {
+        let state = match tinfo {
+            &TunnelState::Running { .. } => super::TunnelState::Open,
+            &TunnelState::Exited { status: None } => super::TunnelState::Closed,
+            &TunnelState::Exited { status: _other } => super::TunnelState::Died,
+        };
+
+        info.tunnels.push(TunnelInformation {
+            host: host.clone(),
+            state: state,
+        });
+    }
+
+    let send = tx.send(ServerMessage::StatusResponse(info));
     transition!(FinalizingTxn { common, tx: send, rx });
 }
 
