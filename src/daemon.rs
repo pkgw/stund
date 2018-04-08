@@ -59,7 +59,7 @@ pub struct State {
     sock_path: PathBuf,
     _opts: StundDaemonOptions,
     log: Box<Write + StdSend>,
-    children: HashMap<String, Tunnel>,
+    children: HashMap<String, TunnelState>,
 }
 
 macro_rules! log {
@@ -195,8 +195,19 @@ impl State {
 type PtyStream = SplitStream<Framed<AsyncPtyMaster, BytesCodec>>;
 type PtySink = SplitSink<Framed<AsyncPtyMaster, BytesCodec>>;
 
-struct Tunnel {
-    _tx_kill: oneshot::Sender<()>,
+enum TunnelState {
+    /// An SSH process that we have launched and is, as far as we know, still
+    /// running.
+    Running {
+        _tx_kill: oneshot::Sender<()>,
+    },
+
+    /// An SSH process that we launched but is now dead. If the exit status is
+    /// `None`, we explicitly killed it; otherwise, it's whatever status the
+    /// process died with.
+    Exited {
+        _status: Option<ExitStatus>,
+    },
 }
 
 
@@ -235,10 +246,14 @@ impl PollChildMonitor for ChildMonitor {
 
             Ok(Async::Ready(status)) => {
                 // Child died! We no longer care about any kill messages, but
-                // we should let the server know what happened.
+                // we should let other tasks know what happened.
+
                 let mut state = state.take();
-                //println!("child died womp womp");
-                state.shared.lock().unwrap().children.remove(&state.key);
+                {
+                    let mut sh = state.shared.lock().unwrap();
+                    log!(sh, "SSH child for {} unexpectedly died: {:?}", state.key, status);
+                    sh.children.insert(state.key, TunnelState::Exited { _status: Some(status) });
+                }
                 state.rx_kill.close();
                 transition!(NotifyingChildDied {
                     tx_die: state.tx_die.send(Some(status)),
@@ -256,8 +271,12 @@ impl PollChildMonitor for ChildMonitor {
             Ok(Async::Ready(_)) => {
                 // We've been told to kill the child.
                 let mut state = state.take();
+                {
+                    let mut sh = state.shared.lock().unwrap();
+                    log!(sh, "ordered to kill SSH child for {}", state.key);
+                    sh.children.insert(state.key, TunnelState::Exited { _status: None });
+                }
                 let _r = state.child.kill(); // can't do anything if this fails
-                state.shared.lock().unwrap().children.remove(&state.key);
                 state.rx_kill.close();
                 transition!(NotifyingChildDied {
                     tx_die: state.tx_die.send(None),
@@ -658,7 +677,7 @@ fn process_open_command(
         // about them when completing the password entry stage of the daemon
         // setup.
 
-        common.shared().children.insert(params.host.clone(), Tunnel {
+        common.shared().children.insert(params.host.clone(), TunnelState::Running {
             _tx_kill: tx_kill,
         });
 
