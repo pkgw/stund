@@ -199,7 +199,7 @@ enum TunnelState {
     /// An SSH process that we have launched and is, as far as we know, still
     /// running.
     Running {
-        _tx_kill: oneshot::Sender<()>,
+        tx_kill: oneshot::Sender<()>,
     },
 
     /// An SSH process that we launched but is now dead. If the exit status is
@@ -437,6 +437,10 @@ impl PollClient for Client {
             None => {
                 // Stream ended. (= connection closed?)
                 transition!(Finished((state.common, state.tx, state.rx)));
+            },
+
+            Some(ClientMessage::Close(params)) => {
+                return process_close_command(state.common, params, state.tx, state.rx);
             },
 
             Some(ClientMessage::Open(params)) => {
@@ -678,7 +682,7 @@ fn process_open_command(
         // setup.
 
         common.shared().children.insert(params.host.clone(), TunnelState::Running {
-            _tx_kill: tx_kill,
+            tx_kill: tx_kill,
         });
 
         Ok(ptymaster.framed(BytesCodec::new()))
@@ -731,6 +735,35 @@ fn hand_off_ssh_process(
     });
 
     handle.spawn(ssh_monitor);
+}
+
+
+fn process_close_command(
+    common: ClientCommonState, params: CloseParameters, tx: Ser, rx: De
+) -> Poll<AfterAwaitingCommand, Error> {
+    log!(common.shared(), "got command to close tunnel SSH for {}", params.host);
+
+    let tx_kill = match common.shared().children.remove(&params.host) {
+        Some(TunnelState::Running { tx_kill }) => Some(tx_kill),
+        Some(TunnelState::Exited { .. }) | None => None,
+    };
+
+    let tx_kill = match tx_kill {
+        Some(t) => t,
+        None => {
+            log!(common.shared(), "no such tunnel -- notifying client");
+            let send = tx.send(ServerMessage::TunnelNotOpen);
+            transition!(FinalizingTxn { common, tx: send, rx });
+        },
+    };
+
+    if let Err(_) = tx_kill.send(()) {
+        let msg = "failed to send internal kill signal (?)".to_owned();
+        transition!(abort_client(common, tx, rx, msg));
+    }
+
+    let send = tx.send(ServerMessage::Ok);
+    transition!(FinalizingTxn { common, tx: send, rx });
 }
 
 

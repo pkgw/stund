@@ -26,10 +26,37 @@ use std::io;
 use std::mem;
 use std::process;
 use structopt::StructOpt;
-use stund_protocol::{OpenParameters, OpenResult};
+use stund_protocol::*;
 use stund_protocol::client::Connection;
 
 mod daemon;
+
+
+#[derive(Debug, StructOpt)]
+pub struct StundCloseOptions {
+    #[structopt(help = "The host for which the tunnel should be closed.")]
+    host: String,
+}
+
+impl StundCloseOptions {
+    fn cli(self) -> Result<i32, Error> {
+        let params = CloseParameters { host: self.host.clone() };
+
+        let conn = Connection::establish()?;
+        let (result, conn) = conn.send_close(params)?;
+
+        match result {
+            CloseResult::Success => {},
+
+            CloseResult::NotOpen => {
+                println!("[No tunnel for \"{}\" was open.]", self.host);
+            },
+        }
+
+        conn.close()?;
+        Ok(0)
+    }
+}
 
 
 #[derive(Debug, StructOpt)]
@@ -123,6 +150,10 @@ impl StundOpenOptions {
 #[derive(Debug, StructOpt)]
 #[structopt(name = "stund", about = "Maintain SSH tunnels in the background.")]
 pub enum StundCli {
+    #[structopt(name = "close")]
+    /// Close an existing SSH tunnel
+    Close(StundCloseOptions),
+
     #[structopt(name = "daemon")]
     /// Manually start the daemon that manages your SSH tunnels
     Daemon(StundDaemonOptions),
@@ -139,6 +170,7 @@ pub enum StundCli {
 impl StundCli {
     fn cli(self) -> Result<i32, Error> {
         match self {
+            StundCli::Close(opts) => opts.cli(),
             StundCli::Daemon(opts) => opts.cli(),
             StundCli::Exit(opts) => opts.cli(),
             StundCli::Open(opts) => opts.cli(),

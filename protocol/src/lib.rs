@@ -38,6 +38,9 @@ pub enum ClientMessage {
     /// User input to be sent to SSH
     UserData(Vec<u8>),
 
+    /// Close an existing tunnel.
+    Close(CloseParameters),
+
     /// Tell the daemon to exit
     Exit,
 
@@ -62,6 +65,10 @@ pub enum ServerMessage {
     /// In response to an `Open` message, indicates that this tunnel is
     /// already open.
     TunnelAlreadyOpen,
+
+    /// In response to a `Close` message, indicates that no such tunnel was
+    /// open.
+    TunnelNotOpen,
 }
 
 
@@ -74,4 +81,16 @@ pub struct OpenParameters {
 pub enum OpenResult {
     Success,
     AlreadyOpen
+}
+
+
+#[derive(Debug, Deserialize, PartialEq, Serialize)]
+pub struct CloseParameters {
+    pub host: String
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum CloseResult {
+    Success,
+    NotOpen
 }

@@ -120,6 +120,32 @@ impl Connection {
     }
 
 
+    pub fn send_close(mut self, params: CloseParameters) -> Result<(CloseResult, Self), Error> {
+        let (ser, de) = (self.ser, self.de);
+
+        let fut = ser.send(ClientMessage::Close(params))
+            .map_err(|e| format_err!("error sending close message to daemon: {}", e))
+            .and_then(move |ser| {
+                de.into_future()
+                    .map_err(|(e, _de)| format_err!("error receiving daemon reply: {}", e))
+                    .map(|(maybe_msg, de)| (maybe_msg, ser, de))
+            }).and_then(|(maybe_msg, ser, de)| {
+                match maybe_msg {
+                    Some(ServerMessage::Ok) => Ok((CloseResult::Success, ser, de)),
+                    Some(ServerMessage::TunnelNotOpen) => Ok((CloseResult::NotOpen, ser, de)),
+                    Some(ServerMessage::Error(msg)) => return Err(format_err!("{}", msg)),
+                    Some(other) => return Err(format_err!("unexpected server reply: {:?}", other)),
+                    None => return Err(format_err!("unexpected disconnection from server")),
+                }
+            });
+
+        let (result, ser, de) = self.core.run(fut)?;
+        self.ser = ser;
+        self.de = de;
+        Ok((result, self))
+    }
+
+
     pub fn send_exit(mut self) -> Result<Self, Error> {
         let (ser, de) = (self.ser, self.de);
 
