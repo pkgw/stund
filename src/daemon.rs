@@ -180,7 +180,9 @@ impl State {
         handle.spawn(server);
 
         // The return and error values of the wait-to-die task are
-        // meaningless.
+        // meaningless. Note that we don't need to explicitly close our SSH
+        // child processes since they'll get SIGHUP'ed when our controlling
+        // PTY goes away, which will cause them to exit as desired. Yay Unix!
 
         let _r = core.run(rx_exit.into_future());
         Ok(())
