@@ -38,16 +38,16 @@ pub struct Connection {
 }
 
 impl Connection {
-    pub fn establish(autolaunch: bool) -> Result<Self, Error> {
+    fn establish_inner(autolaunch: bool) -> Result<Option<Self>, Error> {
         let core = Core::new().context("couldn't create IO core?")?;
         let handle = core.handle();
         let sock_path = get_socket_path().context("couldn't get path to talk to daemon")?;
 
         let conn = match UnixStream::connect(&sock_path, &handle) {
             Ok(c) => c,
-            Err(e) => {
-                if !autolaunch {
-                    return Err(e.into());
+            Err(_e) => {
+                if !autolaunch { // should we care about what the error is exatly?
+                    return Ok(None);
                 }
 
                 let curr_exe = env::current_exe().context("couldn't get current executable path")?;
@@ -84,13 +84,20 @@ impl Connection {
         let rdelim = FramedRead::new(read);
         let de = ReadJson::new(rdelim);
 
-        Ok(Connection {
+        Ok(Some(Connection {
             core: core,
             ser: ser,
             de: de,
-        })
+        }))
     }
 
+    pub fn try_establish() -> Result<Option<Self>, Error> {
+        Self::establish_inner(false)
+    }
+
+    pub fn establish() -> Result<Self, Error> {
+        Ok(Self::establish_inner(true)?.unwrap())
+    }
 
     pub fn close(mut self) -> Result<(), Error> {
         self.core.run(self.ser.send(ClientMessage::Goodbye))?;
@@ -110,6 +117,31 @@ impl Connection {
         self.ser = ser;
         self.de = de;
         Ok((result, self))
+    }
+
+
+    pub fn send_exit(mut self) -> Result<Self, Error> {
+        let (ser, de) = (self.ser, self.de);
+
+        let fut = ser.send(ClientMessage::Exit)
+            .map_err(|e| format_err!("error sending exit message to daemon: {}", e))
+            .and_then(move |ser| {
+                de.into_future()
+                    .map_err(|(e, _de)| format_err!("error receiving daemon reply: {}", e))
+                    .map(|(maybe_msg, de)| (maybe_msg, ser, de))
+            }).and_then(|(maybe_msg, ser, de)| {
+                match maybe_msg {
+                    Some(ServerMessage::Ok) => Ok((ser, de)),
+                    Some(ServerMessage::Error(msg)) => return Err(format_err!("{}", msg)),
+                    Some(other) => return Err(format_err!("unexpected server reply: {:?}", other)),
+                    None => return Err(format_err!("unexpected disconnection from server")),
+                }
+            });
+
+        let (ser, de) = self.core.run(fut)?;
+        self.ser = ser;
+        self.de = de;
+        Ok(self)
     }
 }
 

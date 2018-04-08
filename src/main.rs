@@ -53,7 +53,17 @@ pub struct StundExitOptions {
 
 impl StundExitOptions {
     fn cli(self) -> Result<i32, Error> {
-        println!("TODO");
+        let conn = match Connection::try_establish()? {
+            Some(c) => c,
+
+            None => {
+                println!("[Daemon not running; doing nothing.]");
+                return Ok(0);
+            },
+        };
+
+        let conn = conn.send_exit()?;
+        conn.close()?;
         Ok(0)
     }
 }
@@ -76,7 +86,7 @@ impl StundOpenOptions {
     fn cli(self) -> Result<i32, Error> {
         let params = OpenParameters { host: self.host.clone() };
 
-        let conn = Connection::establish(true)?;
+        let conn = Connection::establish()?;
 
         toggle_terminal_echo(false);
         let r = tokio_borrow_stdio::borrow_stdio(|stdin, stdout| {

@@ -311,6 +311,7 @@ fn process_client(
     let rdelim = FramedRead::new(read);
     let de = ReadJson::new(rdelim);
 
+    let handle2 = handle.clone();
     let shared2 = shared.clone();
     let shared3 = shared.clone();
 
@@ -318,11 +319,16 @@ fn process_client(
         handle: handle.clone(),
         shared: shared,
         _addr: addr,
-        _tx_exit: Some(tx_exit),
+        tx_exit: tx_exit,
+        exit_on_close: false,
     };
 
-    let wrapped = Client::start(common, ser, de).map(move |(_common, _ser, _de)| {
-        log!(shared2.lock().unwrap(), "client session finished");
+    let wrapped = Client::start(common, ser, de).map(move |(common, _ser, _de)| {
+        log!(shared2.lock().unwrap(), "client session finished (exit? {})", common.exit_on_close);
+
+        if common.exit_on_close {
+            handle2.spawn(common.tx_exit.send(()).map(|_| {}).map_err(|_| {}));
+        }
     }).map_err(move |err| {
         log!(shared3.lock().unwrap(), "error from client session: {:?}", err);
     });
@@ -335,7 +341,8 @@ struct ClientCommonState {
     handle: Handle,
     shared: Arc<Mutex<State>>,
     _addr: SocketAddr,
-    _tx_exit: Option<mpsc::Sender<()>>,
+    tx_exit: mpsc::Sender<()>,
+    exit_on_close: bool,
 }
 
 impl ClientCommonState {
@@ -403,7 +410,7 @@ impl PollClient for Client {
         state: &'a mut RentToOwn<'a, AwaitingCommand>
     ) -> Poll<AfterAwaitingCommand, Error> {
         let msg = try_ready!(state.rx.poll());
-        let state = state.take();
+        let mut state = state.take();
 
         match msg {
             None => {
@@ -416,8 +423,19 @@ impl PollClient for Client {
             },
 
             Some(ClientMessage::Exit) => {
-                println!("XXX handle exit");
-                transition!(Finished((state.common, state.tx, state.rx)));
+                // To be able to close out this connection in a nice way, when we get
+                // this command we set a flag that will cause the exit message to be
+                // sent on connection close.
+
+                log!(state.common.shared(), "commanded to exit after client disconnects");
+                state.common.exit_on_close = true;
+                let send = state.tx.send(ServerMessage::Ok);
+
+                transition!(FinalizingTxn {
+                    common: state.common,
+                    tx: send,
+                    rx: state.rx,
+                });
             },
 
             Some(ClientMessage::Goodbye) => {
