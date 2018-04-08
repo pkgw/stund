@@ -79,7 +79,10 @@ pub struct StundOpenOptions {
 
     // TODO? keepalive option/config setting for tunnels that can/should be
     // restarted by the daemon if the SSH process dies; i.e. ones that do not
-    // need interactive authentication to establish.
+    // need interactive authentication to establish. Note that the daemon can
+    // autonomously figure out which connections don't need interactive auth:
+    // those are the ones for which the login process completes without
+    // receiving any user-input messages.
 }
 
 impl StundOpenOptions {
