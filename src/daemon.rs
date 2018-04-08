@@ -637,10 +637,19 @@ impl PollClient for Client {
 fn process_open_command(
     common: ClientCommonState, params: OpenParameters, mut tx: Ser, rx: De
 ) -> Poll<AfterAwaitingCommand, Error> {
-    log!(common.shared(), "got command to spawn SSH for {}", params.host);
+    let never_mind = {
+        let mut sh = common.shared();
+        log!(sh, "got command to spawn SSH for {}", params.host);
 
-    if common.shared().children.contains_key(&params.host) {
-        log!(common.shared(), "tunnel already open -- notifying client");
+        if let Some(&TunnelState::Running { .. }) = sh.children.get(&params.host) {
+            log!(sh, "tunnel already open -- notifying client");
+            true
+        } else {
+            false
+        }
+    };
+
+    if never_mind {
         let send = tx.send(ServerMessage::TunnelAlreadyOpen);
         transition!(FinalizingTxn { common, tx: send, rx });
     }
