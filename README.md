@@ -1,6 +1,7 @@
 # stund — an SSH tunnel daemon
 
-Be warned, this README is very much a work in progress!
+Be warned, this README is very much a work in progress! As is the project as a
+whole.
 
 Stund (“stunned”), an SSH tunnel daemon, will maintain SSH tunnels in the
 background for you. It is convenient when you are often logging in to remote
@@ -33,14 +34,14 @@ line can be automated through SSH configuration.
 Other stund commands:
 
 ```
-stund close login.mydomain.org # close an existing tunnel
-stund status # report status of tunnels
-stund exit # shut down the background daemon if it's running
+stund close login.mydomain.org  # close an existing tunnel
+stund status                    # report status of tunnels
+stund exit                      # shut down the background daemon
 ```
 
 (Yes, stund is basically like running SSH in a
-[GNU screen](https://www.gnu.org/software/screen/) session, with a slightly
-nicer user experience. And in writing it I got to learn a lot of exciting
+[GNU screen](https://www.gnu.org/software/screen/) session. But the user
+experience is a bit nicer, and in writing it I got to learn a lot of exciting
 things about psuedoterminals and asynchronous I/O with Rust’s
 [Tokio](https://tokio.rs/) framework.)
 
