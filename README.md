@@ -29,7 +29,8 @@ If you would normally give SSH more arguments when connecting to the your
 host, set up your
 [SSH config file](https://en.wikibooks.org/wiki/OpenSSH/Client_Configuration_Files)
 with the necessary entries. Virtually any option that appears on the command
-line can be automated through SSH configuration.
+line can be automated through SSH configuration. **You should probably set
+`ServerAliveInterval = 120` for tunnels to be maintained with stund.**
 
 Other stund commands:
 
