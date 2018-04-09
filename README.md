@@ -18,8 +18,8 @@ stund open login.mydomain.org
 
 This will more-or-less run `ssh login.mydomain.org` in such a way that the
 command will disconnect from your terminal after you type in your passwords.
-*If you use
-[SSH connection multiplexing](https://en.wikibooks.org/wiki/OpenSSH/Cookbook/Multiplexing)*,
+**If you use
+[SSH connection multiplexing](https://en.wikibooks.org/wiki/OpenSSH/Cookbook/Multiplexing)**,
 subsequent SSH connections to `login.mydomain.org` will reuse the
 pre-authenticated connection, avoiding repeated password entry.
 
@@ -56,6 +56,17 @@ For now, you have to compile stund yourself:
 3. Check out this repository.
 4. Run `cargo install` in the toplevel directory.
 5. Run `stund help` to verify the installation.
+
+
+## Things You Can Do With Multiplexed SSH Tunnels
+
+- If you log into a service that requires you to type your password, you
+  can just type it once in the morning, instead of periodically throughout
+  the day as you accidentally close your “primary” connection!
+- [Open and close port forwards dynamically](:https://en.wikibooks.org/wiki/OpenSSH/Cookbook/Multiplexing#Port_Forwarding_After_the_Fact).
+- [Transparently log in to hosts that are inside gateways](https://en.wikibooks.org/wiki/OpenSSH/Cookbook/Proxies_and_Jump_Hosts#Jump_Hosts_--_Passing_Through_a_Gateway_or_Two),
+  so that you can do things like `scp` files without having to make multiple
+  hops.
 
 
 ## Copyright and License
