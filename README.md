@@ -3,7 +3,8 @@
 Be warned, this README is very much a work in progress!
 
 Stund (“stunned”), an SSH tunnel daemon, will maintain SSH tunnels in the
-background for you. It is convenient when you are often logging in to
+background for you. It is convenient when you are often logging in to remote
+systems that require you to type in a password every time you connect.
 
 
 ## Usage
