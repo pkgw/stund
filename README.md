@@ -63,7 +63,7 @@ For now, you have to compile stund yourself:
 - If you log into a service that requires you to type your password, you
   can just type it once in the morning, instead of periodically throughout
   the day as you accidentally close your “primary” connection!
-- [Open and close port forwards dynamically](:https://en.wikibooks.org/wiki/OpenSSH/Cookbook/Multiplexing#Port_Forwarding_After_the_Fact).
+- [Open and close port forwards dynamically](https://en.wikibooks.org/wiki/OpenSSH/Cookbook/Multiplexing#Port_Forwarding_After_the_Fact).
 - [Transparently log in to hosts that are inside gateways](https://en.wikibooks.org/wiki/OpenSSH/Cookbook/Proxies_and_Jump_Hosts#Jump_Hosts_--_Passing_Through_a_Gateway_or_Two),
   so that you can do things like `scp` files without having to make multiple
   hops.
