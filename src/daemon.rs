@@ -677,7 +677,11 @@ fn process_open_command(
         let (tx_kill, rx_kill) = oneshot::channel();
         let ptymaster = AsyncPtyMaster::open(&common.handle).context("failed to create PTY")?;
 
+        // The -t arg allocates a PTY for the command so that "tail" will die
+        // with a SIGHUP when SSH dies. Otherwise it will linger forever!
+
         let child = process::Command::new("ssh")
+            .arg("-t")
             .arg(&params.host)
             .arg(format!("echo \"{}\" && exec tail -f /dev/null", key))
             .env_remove("DISPLAY")
