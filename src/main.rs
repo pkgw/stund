@@ -21,9 +21,10 @@ extern crate tokio_serde_json;
 extern crate tokio_signal;
 extern crate tokio_uds;
 
-use failure::Error;
+use failure::{Error, Fail};
 use std::io;
 use std::mem;
+use std::os::unix::process::CommandExt;
 use std::process;
 use structopt::StructOpt;
 use stund_protocol::*;
@@ -98,11 +99,17 @@ impl StundExitOptions {
 
 #[derive(Debug, StructOpt)]
 pub struct StundOpenOptions {
-    #[structopt(help = "The host for which the tunnel should be opened.")]
+    #[structopt()]
+    /// The host for which the tunnel should be opened
     host: String,
 
-    #[structopt(short = "q", long = "quiet", help = "Suppress low-importance UI messages.")]
+    #[structopt(short = "q", long = "quiet")]
+    /// Suppress low-importance UI messages
     quiet: bool,
+
+    #[structopt(raw(last = "true"), value_name = "after-command")]
+    /// If specified, exec this command after opening the tunnel
+    after_command: Vec<String>,
 
     // TODO? keepalive option/config setting for tunnels that can/should be
     // restarted by the daemon if the SSH process dies; i.e. ones that do not
@@ -142,6 +149,22 @@ impl StundOpenOptions {
         }
 
         conn.close()?;
+
+        // `stund open host -- command arg1` syntax, which lets you exec an
+        // arbitrary program after opening the tunnel. This makes it
+        // convenient to write one-liners that open a tunnel if needed, then
+        // do something with it. Note that Command.exec() returns an Error,
+        // not a result, because if it returns at all, something has
+        // necessarily gone wrong ...
+
+        if self.after_command.len() > 0 {
+            return Err(process::Command::new(&self.after_command[0])
+                       .args(&self.after_command[1..])
+                       .exec()
+                       .context("failed to exec post-open command")
+                       .into());
+        }
+
         Ok(0)
     }
 }
