@@ -329,7 +329,9 @@ impl PollOpenWorkflow for OpenWorkflow {
         while let Async::Ready(bytes) = state.rx_user.poll()? {
             match bytes {
                 None => {
-                    return Err(format_err!("EOF on terminal (?)"));
+                    // EOF on the user input. This can happen in --no-input mode or,
+                    // in principle, if stdin is redirected in some way.
+                    break;
                 },
 
                 Some(b) => {
