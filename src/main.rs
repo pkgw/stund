@@ -191,7 +191,15 @@ pub struct StundStatusOptions {
 
 impl StundStatusOptions {
     fn cli(self) -> Result<i32, Error> {
-        let conn = Connection::establish()?;
+        let conn = match Connection::try_establish()? {
+            Some(c) => c,
+
+            None => {
+                println!("Daemon is not running.");
+                return Ok(0);
+            },
+        };
+
         let (info, conn) = conn.query_status()?;
         conn.close()?;
 
@@ -199,7 +207,6 @@ impl StundStatusOptions {
             println!("No tunnels are open.");
         } else {
             let mut longest = 4; // "Host"
-
 
             for tun in &info.tunnels {
                 longest = longest.max(tun.host.len());
