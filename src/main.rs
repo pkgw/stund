@@ -127,7 +127,7 @@ impl StundOpenOptions {
 
         toggle_terminal_echo(false);
         let r = tokio_borrow_stdio::borrow_stdio(|stdin, stdout| {
-            conn.send_open(params, Box::new(stdout), Box::new(stdin))
+            conn.send_open(params, stdout, stdin)
                 .map_err(|_| io::ErrorKind::Other.into())
         });
         toggle_terminal_echo(true);
