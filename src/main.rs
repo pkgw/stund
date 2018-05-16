@@ -107,6 +107,10 @@ pub struct StundOpenOptions {
     /// Suppress low-importance UI messages
     quiet: bool,
 
+    #[structopt(long = "no-input")]
+    /// Do not try to read any user input when logging in
+    no_input: bool,
+
     #[structopt(raw(last = "true"), value_name = "after-command")]
     /// If specified, exec this command after opening the tunnel
     after_command: Vec<String>,
@@ -125,12 +129,23 @@ impl StundOpenOptions {
 
         let conn = Connection::establish()?;
 
-        toggle_terminal_echo(false);
-        let r = tokio_borrow_stdio::borrow_stdio(|stdin, stdout| {
-            conn.send_open(params, stdout, stdin)
+        let r = if self.no_input {
+            // Big hack: we just ignore any output that we ought to print.
+            use futures::Sink;
+            let mut buf = Vec::new();
+            conn.send_open(params,
+                           buf.sink_map_err(|_| io::ErrorKind::Other.into()),
+                           futures::stream::empty())
                 .map_err(|_| io::ErrorKind::Other.into())
-        });
-        toggle_terminal_echo(true);
+        } else {
+            toggle_terminal_echo(false);
+            let r = tokio_borrow_stdio::borrow_stdio(|stdin, stdout| {
+                conn.send_open(params, stdout, stdin)
+                    .map_err(|_| io::ErrorKind::Other.into())
+            });
+            toggle_terminal_echo(true);
+            r
+        };
 
         let (result, conn) = r?;
 

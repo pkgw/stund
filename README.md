@@ -46,6 +46,24 @@ experience is a bit nicer, and in writing it I got to learn a lot of exciting
 things about psuedoterminals and asynchronous I/O with Rust’s
 [Tokio](https://tokio.rs/) framework.)
 
+The `open` command can optionally exec another command after it finishes, if
+you run it with the following syntax:
+
+```
+stund open login.mydomain.org -- command arg1 arg2
+```
+
+This can be useful as a one-liner to open a needed tunnel and log into a host
+lying behind a gateway:
+
+```
+stund open login.mydomain.org -- ssh -J login.mydomain.org myinnerhost
+```
+
+If the connection to `login.mydomain.org` does not need any user interaction
+to be opened, the explicit invocation of `stund` can be avoided with a proper
+SSH `ProxyCommand` configuration item, as mentioned below.
+
 
 ## Installation
 
@@ -68,6 +86,20 @@ For now, you have to compile stund yourself:
 - [Transparently log in to hosts that are inside gateways](https://en.wikibooks.org/wiki/OpenSSH/Cookbook/Proxies_and_Jump_Hosts#Jump_Hosts_--_Passing_Through_a_Gateway_or_Two),
   so that you can do things like `scp` files without having to make multiple
   hops.
+
+If you need to log into hosts that live behind a gateway, *and* the gateway
+doesn’t require any user interaction for you to login in successfully, you can
+use stund’s “exec-after-open” functionality to automatically open long-lived
+background SSH tunnels with `ProxyCommand` settings that look like this:
+
+```
+Host inner.mydomain
+ProxyCommand = stund open --no-input -q login.mydomain.org -- ssh -W inner:%p login.mydomain.org
+```
+
+The `--no-input` option is needed to prevent `stund` from trying to read
+anything from standard input; otherwise it would consume some of the SSH
+traffic.
 
 
 ## Copyright and License
