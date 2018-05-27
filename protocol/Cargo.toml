@@ -18,8 +18,8 @@ license = "MIT"
 failure = "0.1"
 futures = "0.1"
 libc = "0.2"
-serde = "1.0.61" # .62 breaks docs.rs build with i128 types
-serde_derive = "1.0.61"
+serde = "=1.0.61" # .62 breaks docs.rs build with i128 types
+serde_derive = "=1.0.61"
 state_machine_future = "0.1"
 tokio-core = "0.1"
 tokio-io = "0.1"
