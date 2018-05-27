@@ -1,7 +1,18 @@
+# Copyright 2018 Peter Williams <peter@newton.cx>
+# Licensed under the MIT License.
+
 [package]
 name = "stund"
 version = "0.1.2"
 authors = ["Peter Williams <peter@newton.cx>"]
+description = "An SSH tunnel maintenance daemon."
+homepage = "https://github.com/pkgw/stund/"
+documentation = "https://docs.rs/crate/stund"
+repository = "https://github.com/pkgw/stund/"
+readme = "README.md"
+keywords = ["stund"]
+categories = ["asynchronous"]
+license = "MIT"
 
 [workspace]
 
@@ -15,7 +26,7 @@ libc = "0.2"
 rand = "0.4"
 state_machine_future = "0.1"
 structopt = "0.2"
-stund_protocol = { path = "protocol", version = "0.1.0" }
+stund_protocol = { path = "protocol", version = "0.1.1" }
 tokio-borrow-stdio = { path = "tokio-borrow-stdio", version = "0.1.0" }
 tokio-core = "0.1"
 tokio-io = "0.1"

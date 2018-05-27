@@ -115,6 +115,11 @@ requires bidirectional UDP traffic between the client and the server, which is
 often disallowed by conservative firewall rules.
 
 
+## Changes
+
+See [CHANGELOG.md](./CHANGELOG.md) for a list of changes associated with each release.
+
+
 ## Copyright and License
 
 Stund is copyright its authors and is licensed under the
