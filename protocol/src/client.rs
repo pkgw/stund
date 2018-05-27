@@ -19,14 +19,14 @@ use tokio_core::reactor::Core;
 use tokio_io::AsyncRead;
 use tokio_io::codec::length_delimited::{FramedRead, FramedWrite};
 use tokio_io::io::{ReadHalf, WriteHalf};
-use tokio_serde_json::{ReadJson, WriteJson};
+use tokio_serde_bincode::{ReadBincode, WriteBincode};
 use tokio_uds::UnixStream;
 
 use super::*;
 
 
-type Ser = WriteJson<FramedWrite<WriteHalf<UnixStream>>, ClientMessage>;
-type De = ReadJson<FramedRead<ReadHalf<UnixStream>>, ServerMessage>;
+type Ser = WriteBincode<FramedWrite<WriteHalf<UnixStream>>, ClientMessage>;
+type De = ReadBincode<FramedRead<ReadHalf<UnixStream>>, ServerMessage>;
 type UserInputStream = Box<Stream<Item = Vec<u8>, Error = io::Error>>;
 type UserOutputSink = Box<Sink<SinkItem = Vec<u8>, SinkError = io::Error>>;
 
@@ -80,9 +80,9 @@ impl Connection {
 
         let (read, write) = conn.split();
         let wdelim = FramedWrite::new(write);
-        let ser = WriteJson::new(wdelim);
+        let ser = WriteBincode::new(wdelim);
         let rdelim = FramedRead::new(read);
-        let de = ReadJson::new(rdelim);
+        let de = ReadBincode::new(rdelim);
 
         Ok(Some(Connection {
             core: core,

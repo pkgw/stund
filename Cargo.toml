@@ -20,6 +20,6 @@ tokio-borrow-stdio = { path = "tokio-borrow-stdio", version = "0.1.0" }
 tokio-core = "0.1"
 tokio-io = "0.1"
 tokio-pty-process = { path = "tokio-pty-process", version = "0.1.0" }
-tokio-serde-json = { git = "https://github.com/carllerche/tokio-serde-json" }
+tokio-serde-bincode = "0.1"
 tokio-signal = "0.1"
 tokio-uds = "0.1"

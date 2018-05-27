@@ -31,14 +31,14 @@ use tokio_io::codec::length_delimited::{FramedRead, FramedWrite};
 use tokio_io::codec::{BytesCodec, Framed};
 use tokio_io::io::{ReadHalf, WriteHalf};
 use tokio_pty_process::{AsyncPtyMaster, Child, CommandExt};
-use tokio_serde_json::{ReadJson, WriteJson};
+use tokio_serde_bincode::{ReadBincode, WriteBincode};
 use tokio_signal;
 use tokio_uds::{UnixListener, UnixStream};
 
 use super::*;
 
-type Ser = WriteJson<FramedWrite<WriteHalf<UnixStream>>, ServerMessage>;
-type De = ReadJson<FramedRead<ReadHalf<UnixStream>>, ClientMessage>;
+type Ser = WriteBincode<FramedWrite<WriteHalf<UnixStream>>, ServerMessage>;
+type De = ReadBincode<FramedRead<ReadHalf<UnixStream>>, ClientMessage>;
 
 
 const FATAL_SIGNALS: &[i32] = &[
@@ -328,9 +328,9 @@ fn process_client(
 
     let (read, write) = socket.split();
     let wdelim = FramedWrite::new(write);
-    let ser = WriteJson::new(wdelim);
+    let ser = WriteBincode::new(wdelim);
     let rdelim = FramedRead::new(read);
-    let de = ReadJson::new(rdelim);
+    let de = ReadBincode::new(rdelim);
 
     let handle2 = handle.clone();
     let shared2 = shared.clone();
