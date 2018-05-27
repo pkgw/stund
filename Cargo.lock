@@ -559,7 +559,7 @@ dependencies = [
  "rand 0.4.2 (registry+https://github.com/rust-lang/crates.io-index)",
  "state_machine_future 0.1.6 (registry+https://github.com/rust-lang/crates.io-index)",
  "structopt 0.2.8 (registry+https://github.com/rust-lang/crates.io-index)",
- "stund_protocol 0.1.1",
+ "stund_protocol 0.1.2",
  "tokio-borrow-stdio 0.1.0",
  "tokio-core 0.1.17 (registry+https://github.com/rust-lang/crates.io-index)",
  "tokio-io 0.1.6 (registry+https://github.com/rust-lang/crates.io-index)",
@@ -571,7 +571,7 @@ dependencies = [
 
 [[package]]
 name = "stund_protocol"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "failure 0.1.1 (registry+https://github.com/rust-lang/crates.io-index)",
  "futures 0.1.21 (registry+https://github.com/rust-lang/crates.io-index)",
