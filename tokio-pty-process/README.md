@@ -1,11 +1,18 @@
 # tokio-pty-process
 
-A ripoff of `tokio-process`, hacked to work with processes that are being
-interacted with via a pseudoterminal.
+Spawn a child process that is connected to a
+[pseudo-TTY](https://en.wikipedia.org/wiki/Pseudoterminal), interacting with
+it asynchronously using [Tokio](https://tokio.rs/).
 
-# License
+This code is essentially a mashup of
+[tokio-process](https://github.com/alexcrichton/tokio-process) and
+[pty-rs](https://github.com/hibariya/pty-rs). It is more strongly derived from
+the former.
 
-This project is licensed under either of
+
+## Copyright and license
+
+This project is copyright its authors and licensed under either of
 
  * Apache License, Version 2.0, ([LICENSE-APACHE](LICENSE-APACHE) or
    http://www.apache.org/licenses/LICENSE-2.0)
@@ -16,6 +23,7 @@ at your option.
 
 ### Contribution
 
-Unless you explicitly state otherwise, any contribution intentionally submitted
-for inclusion in tokio-pty-process by you, as defined in the Apache-2.0 license, shall be
-dual licensed as above, without any additional terms or conditions.
+Unless you explicitly state otherwise, any contribution intentionally
+submitted for inclusion in `tokio-pty-process` by you, as defined in the
+Apache-2.0 license, shall be dual licensed as above, without any additional
+terms or conditions.

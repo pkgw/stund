@@ -1,4 +1,34 @@
-//! Hacked up pty-process fun.
+// Copyright 2018 Peter Williams <peter@newton.cx>
+// Licensed under both the MIT License and the Apache-2.0 license.
+
+#![deny(missing_docs)]
+
+//! Spawn a child process under a pseudo-TTY, interacting with it
+//! asynchronously using Tokio.
+//!
+//! A [pseudo-terminal](https://en.wikipedia.org/wiki/Pseudoterminal) (or
+//! “pseudo-TTY” or “PTY”) is a special Unix file handle that models the kind
+//! of text terminal through which users used to interact with computers. A
+//! PTY enables a specialized form of bidirectional interprocess communication
+//! that a variety of user-facing Unix programs take advantage of.
+//!
+//! The basic way to use this crate is:
+//!
+//! 1. Create a Tokio [Reactor](https://docs.rs/tokio/*/tokio/reactor/struct.Reactor.html)
+//!    that will handle all of your asynchronous I/O.
+//! 2. Create an `AsyncPtyMaster` that represents your ownership of
+//!    an OS pseudo-terminal.
+//! 3. Use your master and the `spawn_pty_async` function of the `CommandExt`
+//!    extension trait, which extends `std::process::Command`, to launch a child
+//!    process that is connected to your master.
+//! 4. Optionally control the child process (e.g. send it signals) through the
+//!    `Child` value returned by that function.
+//!
+//! This crate only works on Unix since pseudo-terminals are a Unix-specific
+//! concept.
+//!
+//! The `Child` type is largely copied from Alex Crichton’s
+//! [tokio-process](https://github.com/alexcrichton/tokio-process) crate.
 
 extern crate futures;
 extern crate libc;
@@ -77,9 +107,18 @@ impl Evented for AsyncPtyFile {
 }
 
 
+/// A handle to a pseudo-TTY master that can be interacted with
+/// asynchronously.
+///
+/// This type implements both `AsyncRead` and `AsyncWrite`.
 pub struct AsyncPtyMaster(PollEvented<AsyncPtyFile>);
 
 impl AsyncPtyMaster {
+    /// Open a pseudo-TTY master.
+    ///
+    /// This function performs the C library calls `posix_openpt()`,
+    /// `grantpt()`, and `unlockpt()`. It also sets the resulting pseudo-TTY
+    /// master handle to nonblocking mode.
     pub fn open(handle: &Handle) -> Result<Self, io::Error> {
         let inner = unsafe {
             let fd = libc::posix_openpt(libc::O_RDWR | libc::O_NOCTTY);
@@ -113,6 +152,9 @@ impl AsyncPtyMaster {
         Ok(AsyncPtyMaster(PollEvented::new(AsyncPtyFile::new(inner), handle)?))
     }
 
+    /// Open a pseudo-TTY slave that is connected to this master.
+    ///
+    /// The resulting file handle is *not* set to non-blocking mode.
     fn open_sync_pty_slave(&self) -> Result<File, io::Error> {
         let mut buf: [libc::c_char; 512] = [0; 512];
         let fd = self.as_raw_fd();
@@ -160,6 +202,7 @@ impl AsyncWrite for AsyncPtyMaster {
 
 // Now, the async-ified child process framework.
 
+/// A child process that can be interacted with through a pseudo-TTY.
 #[must_use = "futures do nothing unless polled"]
 pub struct Child {
     inner: process::Child,
@@ -181,7 +224,7 @@ impl fmt::Debug for Child {
 }
 
 impl Child {
-    pub fn new(inner: process::Child, handle: &Handle) -> Child {
+    fn new(inner: process::Child, handle: &Handle) -> Child {
         Child {
             inner: inner,
             kill_on_drop: true,
@@ -215,6 +258,7 @@ impl Child {
         self.kill_on_drop = false;
     }
 
+    /// Check whether this `Child` has exited yet.
     pub fn poll_exit(&mut self) -> Poll<ExitStatus, io::Error> {
         assert!(!self.reaped);
 
@@ -281,9 +325,22 @@ impl Drop for Child {
 }
 
 
-// Now, the extension to the Command type to glue it all together.
-
+/// An extension trait for the `std::process::Command` type.
+///
+/// This trait provides a new `spawn_pty_async` method that allows one to
+/// spawn a new process that is connected to the current process through a
+/// pseudo-TTY.
 pub trait CommandExt {
+    /// Spawn a subprocess that connects to the current one through a
+    /// pseudo-TTY.
+    ///
+    /// This function creates the necessary PTY slave and uses
+    /// `std::process::Command::before_exec` to do the neccessary setup before
+    /// the child process is spawned. In particular, it sets the slave PTY
+    /// handle to raw mode and calls `setsid()` to launch a new TTY sesson.
+    ///
+    /// The child process’s standard input, standard output, and standard
+    /// error are all connected to the pseudo-TTY slave.
     fn spawn_pty_async(&mut self, ptymaster: &AsyncPtyMaster, handle: &Handle) -> io::Result<Child>;
 }
 
