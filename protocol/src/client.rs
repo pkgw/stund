@@ -1,7 +1,11 @@
 // Copyright 2018 Peter Williams <peter@newton.cx>
 // Licensed under the MIT License.
 
-//! Interfacing with the daemon.
+//! Communication with the daemon.
+//!
+//! This module provides the [`Connection`] type, which provides a
+//! programmatic interface to requests that clients may make of the stund
+//! server.
 
 use failure::{Error, ResultExt};
 use futures::{Async, AsyncSink, Future, Poll, Sink, Stream};
@@ -31,6 +35,7 @@ type UserInputStream = Box<Stream<Item = Vec<u8>, Error = io::Error>>;
 type UserOutputSink = Box<Sink<SinkItem = Vec<u8>, SinkError = io::Error>>;
 
 
+/// A connection the stund daemon.
 pub struct Connection {
     core: Core,
     ser: Ser,
@@ -91,20 +96,32 @@ impl Connection {
         }))
     }
 
+    /// Try to connect to the daemon.
+    ///
+    /// If the daemon is not running, returns `Ok(None)`.
     pub fn try_establish() -> Result<Option<Self>, Error> {
         Self::establish_inner(false)
     }
 
+    /// Connect to the daemon, starting it if it is not already running.
     pub fn establish() -> Result<Self, Error> {
         Ok(Self::establish_inner(true)?.unwrap())
     }
 
+    /// Close the connection to the daemon.
+    ///
+    /// This operation conducts I/O because it sends a "Goodbye" message.
     pub fn close(mut self) -> Result<(), Error> {
         self.core.run(self.ser.send(ClientMessage::Goodbye))?;
         Ok(())
     }
 
-
+    /// Tell the daemon to open a new SSH connection.
+    ///
+    /// Because the user may have to type a password or respond to some other
+    /// prompt from the server to authenticate themselves, callers of this
+    /// function must provide asynchronous I/O types implementing this user
+    /// interaction.
     pub fn send_open<T, R>(
         mut self, params: OpenParameters, tx_user: T, rx_user: R
     ) -> Result<(OpenResult, Self), Error>
@@ -119,7 +136,10 @@ impl Connection {
         Ok((result, self))
     }
 
-
+    /// Query the server’s status.
+    ///
+    /// At the moment, the only information that is returned is a list of
+    /// connections that have been opened and their current state.
     pub fn query_status(mut self) -> Result<(StatusInformation, Self), Error> {
         let (ser, de) = (self.ser, self.de);
 
@@ -144,7 +164,7 @@ impl Connection {
         Ok((info, self))
     }
 
-
+    /// Tell the server to close an existing tunnel.
     pub fn send_close(mut self, params: CloseParameters) -> Result<(CloseResult, Self), Error> {
         let (ser, de) = (self.ser, self.de);
 
@@ -170,7 +190,11 @@ impl Connection {
         Ok((result, self))
     }
 
-
+    /// Tell the server to exit.
+    ///
+    /// This, of course, means that all SSH tunnels will be closed. The server
+    /// will not actually exit until the client sends its "Goodbye" message
+    /// and disconnections.
     pub fn send_exit(mut self) -> Result<Self, Error> {
         let (ser, de) = (self.ser, self.de);
 
