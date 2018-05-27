@@ -64,14 +64,17 @@ SSH `ProxyCommand` configuration item, as mentioned below.
 
 ## Installation
 
-For now, you have to compile stund yourself:
+For now, you have to compile stund yourself. But, installing the latest
+version should be pretty simple:
 
 1. Install the [Rust language](https://www.rust-lang.org/en-US/) toolchain if
    you don't already have it.
 2. Add `$HOME/.cargo/bin` to your `$PATH` if it is not already there.
-3. Check out this repository.
-4. Run `cargo install` in the toplevel directory.
-5. Run `stund help` to verify the installation.
+3. Run `cargo install -f stund`
+4. Run `stund help` to verify the installation.
+
+You don’t need to check out this repository unless you want to install
+a bleeding-edge version of `stund` rather than the latest release.
 
 
 ## Things You Can Do With Multiplexed SSH Tunnels
