@@ -1,7 +1,18 @@
+# Copyright 2018 Peter Williams <peter@newton.cx>
+# Licensed under the MIT License.
+
 [package]
 name = "tokio-borrow-stdio"
 version = "0.1.0"
 authors = ["Peter Williams <peter@newton.cx>"]
+description = "Temporarily expose standard input and output to a Tokio core."
+homepage = "https://github.com/pkgw/stund/tree/master/tokio-borrow-stdio"
+documentation = "https://docs.rs/crate/tokio-borrow-stdio"
+repository = "https://github.com/pkgw/stund/"
+readme = "README.md"
+keywords = ["tokio", "stdio"]
+categories = ["asynchronous", "os::unix-apis"]
+license = "MIT"
 
 [dependencies]
 futures = "0.1"

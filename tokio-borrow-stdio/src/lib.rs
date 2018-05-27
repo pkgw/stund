@@ -1,8 +1,15 @@
 // Copyright 2018 Peter Williams <peter@newton.cx>
 // Licensed under the MIT License.
 
+#![deny(missing_docs)]
+
 //! "Borrow" the stdio streams temporarily, exposing them to a Tokio core as
 //! nonblocking streams.
+//!
+//! As in many such implementations, the I/O is made nonblocking by spawning
+//! threads to interact with the stdin and stdout streams. These exchange data
+//! with the calling thread through [futures
+//! channels](https://docs.rs/futures/*/futures/channel/index.html).
 
 extern crate futures;
 extern crate tokio_core;
