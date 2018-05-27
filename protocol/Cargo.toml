@@ -3,11 +3,11 @@
 
 [package]
 name = "stund_protocol"
-version = "0.1.0"
+version = "0.1.1"
 authors = ["Peter Williams <peter@newton.cx>"]
 description = "The client/server protocol used by the \"stund\" program."
 homepage = "https://github.com/pkgw/stund/tree/master/protocol"
-documentation = "https://docs.rs/crate/stund_protol"
+documentation = "https://docs.rs/stund_protocol"
 repository = "https://github.com/pkgw/stund/"
 readme = "README.md"
 keywords = ["stund"]
@@ -18,8 +18,8 @@ license = "MIT"
 failure = "0.1"
 futures = "0.1"
 libc = "0.2"
-serde = "1.0"
-serde_derive = "1.0"
+serde = "1.0.61" # .62 breaks docs.rs build with i128 types
+serde_derive = "1.0.61"
 state_machine_future = "0.1"
 tokio-core = "0.1"
 tokio-io = "0.1"
