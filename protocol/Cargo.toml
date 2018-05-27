@@ -1,7 +1,18 @@
+# Copyright 2018 Peter Williams <peter@newton.cx>
+# Licensed under the MIT License.
+
 [package]
 name = "stund_protocol"
 version = "0.1.0"
 authors = ["Peter Williams <peter@newton.cx>"]
+description = "The client/server protocol used by the \"stund\" program."
+homepage = "https://github.com/pkgw/stund/tree/master/protocol"
+documentation = "https://docs.rs/crate/stund_protol"
+repository = "https://github.com/pkgw/stund/"
+readme = "README.md"
+keywords = ["stund"]
+categories = ["asynchronous"]
+license = "MIT"
 
 [dependencies]
 failure = "0.1"
@@ -14,4 +25,3 @@ tokio-core = "0.1"
 tokio-io = "0.1"
 tokio-serde-bincode = "0.1"
 tokio-uds = "0.1"
-
