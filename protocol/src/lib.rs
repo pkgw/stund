@@ -2,7 +2,7 @@
 // Licensed under the MIT License.
 
 #![deny(missing_docs)]
-#![doc(html_root_url = "https://docs.rs/stund_protocol/0.1.2")]
+#![doc(html_root_url = "https://docs.rs/stund_protocol/0.1.3")]
 
 //! The stund client-server communication protocol.
 //!

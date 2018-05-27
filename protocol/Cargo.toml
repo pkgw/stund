@@ -3,7 +3,7 @@
 
 [package]
 name = "stund_protocol"
-version = "0.1.2" # also update html_root_url
+version = "0.1.3" # also update html_root_url
 authors = ["Peter Williams <peter@newton.cx>"]
 description = "The client/server protocol used by the \"stund\" program."
 homepage = "https://github.com/pkgw/stund/tree/master/protocol"
@@ -18,8 +18,8 @@ license = "MIT"
 failure = "0.1"
 futures = "0.1"
 libc = "0.2"
-serde = "=1.0.61" # .62 breaks docs.rs build with i128 types
-serde_derive = "=1.0.61"
+serde = "=1.0.55" # .62-ish breaks docs.rs build with i128 types
+serde_derive = "=1.0.55"
 state_machine_future = "0.1"
 tokio-core = "0.1"
 tokio-io = "0.1"
