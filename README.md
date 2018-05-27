@@ -1,8 +1,5 @@
 # stund — an SSH tunnel daemon
 
-Be warned, this README is very much a work in progress! As is the project as a
-whole.
-
 Stund (“stunned”), an SSH tunnel daemon, will maintain SSH tunnels in the
 background for you. It is convenient when you are often logging in to remote
 systems that require you to type in a password every time you connect.
@@ -100,6 +97,22 @@ ProxyCommand = stund open --no-input -q login.mydomain.org -- ssh -W inner:%p lo
 The `--no-input` option is needed to prevent `stund` from trying to read
 anything from standard input; otherwise it would consume some of the SSH
 traffic.
+
+
+## Things Stund Can’t Do
+
+The big limitation is that `stund` can’t keep your SSH connection alive if you
+suspend your laptop or switch networks. It’s simply not possible to do this
+due to the fundamental design of the SSH protocol (namely, that SSH runs over
+long-lived TCP connections).
+
+If this is the functionality you want, the best solution of which we are aware
+is [mosh](https://mosh.org/), which uses a sessionless UDP-based protocol
+that’s bootstrapped over a temporary SSH connection. While this design allows
+`mosh` to overcome some of SSH’s limitations, it means that `mosh` doesn’t
+support features like port forwarding and file transfers. Also, `mosh`
+requires bidirectional UDP traffic between the client and the server, which is
+often disallowed by conservative firewall rules.
 
 
 ## Copyright and License
