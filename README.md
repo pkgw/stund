@@ -4,6 +4,17 @@ Stund (“stunned”), an SSH tunnel daemon, will maintain SSH tunnels in the
 background for you. It is convenient when you are often logging in to remote
 systems that require you to type in a password every time you connect.
 
+[![](http://meritbadge.herokuapp.com/stund)](https://crates.io/crates/stund)
+
+If you have a [Rust](https://rust-lang.org/) toolchain available, you can
+install `stund` by running
+
+```
+cargo install stund
+```
+
+[See below](#installation) for more detailed installation instructions.
+
 
 ## Usage
 
@@ -68,7 +79,8 @@ For now, you have to compile stund yourself. But, installing the latest
 version should be pretty simple:
 
 1. Install the [Rust language](https://www.rust-lang.org/en-US/) toolchain if
-   you don't already have it.
+   you don't already have it. In almost all cases the recommended method is to
+   use [rustup.rs](https://rustup.rs/).
 2. Add `$HOME/.cargo/bin` to your `$PATH` if it is not already there.
 3. Run `cargo install -f stund`
 4. Run `stund help` to verify the installation.
