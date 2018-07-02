@@ -33,8 +33,7 @@
 extern crate futures;
 extern crate libc;
 extern crate mio;
-extern crate tokio_core; // TODO: migrate to just `tokio`; blocking on `tokio_signal`.
-extern crate tokio_io;
+extern crate tokio;
 extern crate tokio_signal;
 
 use futures::{Async, Future, Poll, Stream};
@@ -51,9 +50,10 @@ use std::mem;
 use std::os::unix::prelude::*;
 use std::os::unix::process::CommandExt as StdUnixCommandExt;
 use std::process::{self, ExitStatus};
-use tokio_core::reactor::{Handle, PollEvented};
-use tokio_io::{AsyncWrite, AsyncRead, IoFuture};
+use tokio::io::{AsyncWrite, AsyncRead};
 use tokio_signal::unix::Signal;
+use tokio_signal::IoFuture;
+use tokio::reactor::{PollEvented2};
 
 
 // First set of hoops to jump through: a read-write pseudo-terminal master
@@ -111,7 +111,7 @@ impl Evented for AsyncPtyFile {
 /// asynchronously.
 ///
 /// This type implements both `AsyncRead` and `AsyncWrite`.
-pub struct AsyncPtyMaster(PollEvented<AsyncPtyFile>);
+pub struct AsyncPtyMaster(PollEvented2<AsyncPtyFile>);
 
 impl AsyncPtyMaster {
     /// Open a pseudo-TTY master.
@@ -119,7 +119,7 @@ impl AsyncPtyMaster {
     /// This function performs the C library calls `posix_openpt()`,
     /// `grantpt()`, and `unlockpt()`. It also sets the resulting pseudo-TTY
     /// master handle to nonblocking mode.
-    pub fn open(handle: &Handle) -> Result<Self, io::Error> {
+    pub fn open() -> Result<Self, io::Error> {
         let inner = unsafe {
             let fd = libc::posix_openpt(libc::O_RDWR | libc::O_NOCTTY);
             if fd < 0 {
@@ -149,7 +149,7 @@ impl AsyncPtyMaster {
             File::from_raw_fd(fd)
         };
 
-        Ok(AsyncPtyMaster(PollEvented::new(AsyncPtyFile::new(inner), handle)?))
+        Ok(AsyncPtyMaster(PollEvented2::new(AsyncPtyFile::new(inner))))
     }
 
     /// Open a pseudo-TTY slave that is connected to this master.
@@ -224,12 +224,12 @@ impl fmt::Debug for Child {
 }
 
 impl Child {
-    fn new(inner: process::Child, handle: &Handle) -> Child {
+    fn new(inner: process::Child) -> Child {
         Child {
             inner: inner,
             kill_on_drop: true,
             reaped: false,
-            sigchld: Signal::new(libc::SIGCHLD, handle).flatten_stream(),
+            sigchld: Signal::new(libc::SIGCHLD).flatten_stream(),
         }
     }
 
@@ -341,12 +341,12 @@ pub trait CommandExt {
     ///
     /// The child process’s standard input, standard output, and standard
     /// error are all connected to the pseudo-TTY slave.
-    fn spawn_pty_async(&mut self, ptymaster: &AsyncPtyMaster, handle: &Handle) -> io::Result<Child>;
+    fn spawn_pty_async(&mut self, ptymaster: &AsyncPtyMaster) -> io::Result<Child>;
 }
 
 
 impl CommandExt for process::Command {
-    fn spawn_pty_async(&mut self, ptymaster: &AsyncPtyMaster, handle: &Handle) -> io::Result<Child> {
+    fn spawn_pty_async(&mut self, ptymaster: &AsyncPtyMaster) -> io::Result<Child> {
         let master_fd = ptymaster.as_raw_fd();
         let slave = ptymaster.open_sync_pty_slave()?;
         let slave_fd = slave.as_raw_fd();
@@ -390,6 +390,6 @@ impl CommandExt for process::Command {
             Ok(())
         });
 
-        Ok(Child::new(self.spawn()?, handle))
+        Ok(Child::new(self.spawn()?))
     }
 }

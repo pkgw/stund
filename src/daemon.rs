@@ -675,7 +675,7 @@ fn process_open_command(
         tx_die: mpsc::Sender<Option<ExitStatus>>, key: &str
     ) -> Result<Framed<AsyncPtyMaster, BytesCodec>, Error> {
         let (tx_kill, rx_kill) = oneshot::channel();
-        let ptymaster = AsyncPtyMaster::open(&common.handle).context("failed to create PTY")?;
+        let ptymaster = AsyncPtyMaster::open().context("failed to create PTY")?;
 
         // The -t arg allocates a PTY for the command so that "tail" will die
         // with a SIGHUP when SSH dies. Otherwise it will linger forever!
@@ -685,7 +685,7 @@ fn process_open_command(
             .arg(&params.host)
             .arg(format!("echo \"{}\" && exec tail -f /dev/null", key))
             .env_remove("DISPLAY")
-            .spawn_pty_async(&ptymaster, &common.handle).context("failed to launch SSH")?;
+            .spawn_pty_async(&ptymaster).context("failed to launch SSH")?;
 
         // The task that will remember this child and wait around for it die.
 
