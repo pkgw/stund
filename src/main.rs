@@ -270,7 +270,7 @@ fn main() {
 
         Err(e) => {
             eprintln!("fatal error in stund");
-            for cause in e.causes() {
+            for cause in e.iter_chain() {
                 eprintln!("  caused by: {}", cause);
             }
             1
