@@ -121,7 +121,7 @@ impl AsyncPtyMaster {
     /// master handle to nonblocking mode.
     pub fn open() -> Result<Self, io::Error> {
         let inner = unsafe {
-            let fd = libc::posix_openpt(libc::O_RDWR | libc::O_NOCTTY);
+            let fd = libc::posix_openpt(libc::O_RDWR | libc::O_NOCTTY | libc::O_NONBLOCK);
             if fd < 0 {
                 return Err(io::Error::last_os_error());
             }
@@ -132,18 +132,6 @@ impl AsyncPtyMaster {
 
             if libc::unlockpt(fd) != 0 {
                 return Err(io::Error::last_os_error());
-            }
-
-            // XXX just set nonblock on open? will that make grantpt and unlockpt
-            // start acting funky?
-
-            let r = libc::fcntl(fd, libc::F_GETFL);
-            if r < 0 {
-                return Err(io::Error::last_os_error())
-            }
-
-            if libc::fcntl(fd, libc::F_SETFL, r | libc::O_NONBLOCK) < 0 {
-                return Err(io::Error::last_os_error())
             }
 
             File::from_raw_fd(fd)
@@ -159,8 +147,19 @@ impl AsyncPtyMaster {
         let mut buf: [libc::c_char; 512] = [0; 512];
         let fd = self.as_raw_fd();
 
-        if unsafe { libc::ptsname_r(fd, buf.as_mut_ptr(), buf.len()) } != 0 {
-            return Err(io::Error::last_os_error());
+        #[cfg(not(target_os = "macos"))]
+        {
+            if unsafe { libc::ptsname_r(fd, buf.as_mut_ptr(), buf.len()) } != 0 {
+                return Err(io::Error::last_os_error());
+            }
+        }
+        #[cfg(target_os = "macos")]
+        unsafe {
+            let st = libc::ptsname(fd);
+            if st.is_null() {
+                return Err(io::Error::last_os_error());
+            }
+            libc::strncpy(buf.as_mut_ptr(), st, buf.len());
         }
 
         let ptsname = OsStr::from_bytes(unsafe { CStr::from_ptr(&buf as _) }.to_bytes());
@@ -396,7 +395,7 @@ impl CommandExt for process::Command {
                     return Err(io::Error::last_os_error());
                 }
 
-                if libc::ioctl(0, libc::TIOCSCTTY, 1) != 0 {
+                if libc::ioctl(0, libc::TIOCSCTTY.into(), 1) != 0 {
                     return Err(io::Error::last_os_error());
                 }
             }
@@ -430,7 +429,7 @@ impl CommandExt for process::Command {
                     return Err(io::Error::last_os_error());
                 }
 
-                if libc::ioctl(0, libc::TIOCSCTTY, 1) != 0 {
+                if libc::ioctl(0, libc::TIOCSCTTY.into(), 1) != 0 {
                     return Err(io::Error::last_os_error());
                 }
             }
