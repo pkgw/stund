@@ -19,6 +19,8 @@ matrix:
       sudo: required
       dist: xenial
       rust: nightly
+    - os: osx
+      rust: stable
   allow_failures:
     - rust: nightly
 
