@@ -3,7 +3,7 @@
 
 [package]
 name = "tokio-pty-process"
-version = "0.2.0"
+version = "0.3.0"
 authors = ["Alex Crichton <alex@alexcrichton.com>", "Peter Williams <peter@newton.cx>"]
 description = "Interact with a child process through a pseudo-TTY, asynchronously using Tokio"
 homepage = "https://github.com/pkgw/stund/tree/master/tokio-pty-process"
