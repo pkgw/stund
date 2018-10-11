@@ -18,9 +18,10 @@
 //!    that will handle all of your asynchronous I/O.
 //! 2. Create an `AsyncPtyMaster` that represents your ownership of
 //!    an OS pseudo-terminal.
-//! 3. Use your master and the `spawn_pty_async` function of the `CommandExt`
-//!    extension trait, which extends `std::process::Command`, to launch a child
-//!    process that is connected to your master.
+//! 3. Use your master and the `spawn_pty_async` or `spawn_pty_async_raw`
+//!    functions of the `CommandExt` extension trait, which extends
+//!    `std::process::Command`, to launch a child process that is connected to
+//!    your master.
 //! 4. Optionally control the child process (e.g. send it signals) through the
 //!    `Child` value returned by that function.
 //!
@@ -325,28 +326,13 @@ impl Drop for Child {
 }
 
 
-/// An extension trait for the `std::process::Command` type.
-///
-/// This trait provides a new `spawn_pty_async` method that allows one to
-/// spawn a new process that is connected to the current process through a
-/// pseudo-TTY.
-pub trait CommandExt {
-    /// Spawn a subprocess that connects to the current one through a
-    /// pseudo-TTY.
-    ///
-    /// This function creates the necessary PTY slave and uses
-    /// `std::process::Command::before_exec` to do the neccessary setup before
-    /// the child process is spawned. In particular, it sets the slave PTY
-    /// handle to raw mode and calls `setsid()` to launch a new TTY sesson.
-    ///
-    /// The child process’s standard input, standard output, and standard
-    /// error are all connected to the pseudo-TTY slave.
-    fn spawn_pty_async(&mut self, ptymaster: &AsyncPtyMaster) -> io::Result<Child>;
+/// A private trait for the extending `std::process::Command`.
+trait CommandExtInternal {
+    fn spawn_pty_async_full(&mut self, ptymaster: &AsyncPtyMaster, raw: bool) -> io::Result<Child>;
 }
 
-
-impl CommandExt for process::Command {
-    fn spawn_pty_async(&mut self, ptymaster: &AsyncPtyMaster) -> io::Result<Child> {
+impl CommandExtInternal for process::Command {
+    fn spawn_pty_async_full(&mut self, ptymaster: &AsyncPtyMaster, raw: bool) -> io::Result<Child> {
         let master_fd = ptymaster.as_raw_fd();
         let slave = ptymaster.open_sync_pty_slave()?;
         let slave_fd = slave.as_raw_fd();
@@ -360,16 +346,18 @@ impl CommandExt for process::Command {
 
         self.before_exec(move || {
             unsafe {
-                let mut attrs: libc::termios = mem::zeroed();
+                if raw {
+                    let mut attrs: libc::termios = mem::zeroed();
 
-                if libc::tcgetattr(slave_fd, &mut attrs as _) != 0 {
-                    return Err(io::Error::last_os_error());
-                }
+                    if libc::tcgetattr(slave_fd, &mut attrs as _) != 0 {
+                        return Err(io::Error::last_os_error());
+                    }
 
-                libc::cfmakeraw(&mut attrs as _);
+                    libc::cfmakeraw(&mut attrs as _);
 
-                if libc::tcsetattr(slave_fd, libc::TCSANOW, &attrs as _) != 0 {
-                    return Err(io::Error::last_os_error());
+                    if libc::tcsetattr(slave_fd, libc::TCSANOW, &attrs as _) != 0 {
+                        return Err(io::Error::last_os_error());
+                    }
                 }
 
                 // This is OK even though we don't own master since this process is
@@ -391,5 +379,48 @@ impl CommandExt for process::Command {
         });
 
         Ok(Child::new(self.spawn()?))
+    }
+}
+
+
+/// An extension trait for the `std::process::Command` type.
+///
+/// This trait provides new `spawn_pty_async` and `spawn_pty_async_raw`
+/// methods that allow one to spawn a new process that is connected to the
+/// current process through a pseudo-TTY.
+pub trait CommandExt {
+    /// Spawn a subprocess that connects to the current one through a
+    /// pseudo-TTY in canonical (“cooked“, not “raw”) mode.
+    ///
+    /// This function creates the necessary PTY slave and uses
+    /// `std::process::Command::before_exec` to do the neccessary setup before
+    /// the child process is spawned. In particular, it calls `setsid()` to
+    /// launch a new TTY sesson.
+    ///
+    /// The child process’s standard input, standard output, and standard
+    /// error are all connected to the pseudo-TTY slave.
+    fn spawn_pty_async(&mut self, ptymaster: &AsyncPtyMaster) -> io::Result<Child>;
+
+    /// Spawn a subprocess that connects to the current one through a
+    /// pseudo-TTY in raw (“non-canonical”, not “cooked”) mode.
+    ///
+    /// This function creates the necessary PTY slave and uses
+    /// `std::process::Command::before_exec` to do the neccessary setup before
+    /// the child process is spawned. In particular, it sets the slave PTY
+    /// handle to raw mode and calls `setsid()` to launch a new TTY sesson.
+    ///
+    /// The child process’s standard input, standard output, and standard
+    /// error are all connected to the pseudo-TTY slave.
+    fn spawn_pty_async_raw(&mut self, ptymaster: &AsyncPtyMaster) -> io::Result<Child>;
+}
+
+
+impl CommandExt for process::Command {
+    fn spawn_pty_async(&mut self, ptymaster: &AsyncPtyMaster) -> io::Result<Child> {
+        self.spawn_pty_async_full(ptymaster, false)
+    }
+
+    fn spawn_pty_async_raw(&mut self, ptymaster: &AsyncPtyMaster) -> io::Result<Child> {
+        self.spawn_pty_async_full(ptymaster, true)
     }
 }
