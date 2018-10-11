@@ -342,6 +342,20 @@ pub trait CommandExt {
     /// The child process’s standard input, standard output, and standard
     /// error are all connected to the pseudo-TTY slave.
     fn spawn_pty_async(&mut self, ptymaster: &AsyncPtyMaster) -> io::Result<Child>;
+
+    /// Spawn a subprocess that connects to the current one through a
+    /// pseudo-TTY.
+    ///
+    /// This function creates the necessary PTY slave and uses
+    /// `std::process::Command::before_exec` to do the neccessary setup before
+    /// the child process is spawned. In particular, it calls `setsid()` to
+    /// launch a new TTY sesson.
+    ///
+    /// Unlike spawn_pty_async, it does not set the child tty to raw mode.
+    ///
+    /// The child process’s standard input, standard output, and standard
+    /// error are all connected to the pseudo-TTY slave.
+    fn spawn_pty_async_pristine(&mut self, ptymaster: &AsyncPtyMaster) -> io::Result<Child>;
 }
 
 
@@ -372,6 +386,40 @@ impl CommandExt for process::Command {
                     return Err(io::Error::last_os_error());
                 }
 
+                // This is OK even though we don't own master since this process is
+                // about to become something totally different anyway.
+                if libc::close(master_fd) != 0 {
+                    return Err(io::Error::last_os_error());
+                }
+
+                if libc::setsid() < 0 {
+                    return Err(io::Error::last_os_error());
+                }
+
+                if libc::ioctl(0, libc::TIOCSCTTY, 1) != 0 {
+                    return Err(io::Error::last_os_error());
+                }
+            }
+
+            Ok(())
+        });
+
+        Ok(Child::new(self.spawn()?))
+    }
+
+    fn spawn_pty_async_pristine(&mut self, ptymaster: &AsyncPtyMaster) -> io::Result<Child> {
+        let master_fd = ptymaster.as_raw_fd();
+        let slave = ptymaster.open_sync_pty_slave()?;
+
+        self.stdin(slave.try_clone()?);
+        self.stdout(slave.try_clone()?);
+        self.stderr(slave);
+
+        // XXX any need to close slave handles in the parent process beyond
+        // what's done here?
+
+        self.before_exec(move || {
+            unsafe {
                 // This is OK even though we don't own master since this process is
                 // about to become something totally different anyway.
                 if libc::close(master_fd) != 0 {
