@@ -11,7 +11,7 @@ extern crate daemonize;
 extern crate libc;
 extern crate rand;
 #[macro_use] extern crate state_machine_future;
-#[macro_use] extern crate structopt;
+extern crate structopt;
 extern crate stund_protocol;
 extern crate tokio_borrow_stdio;
 extern crate tokio_codec;
