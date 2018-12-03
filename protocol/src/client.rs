@@ -20,17 +20,13 @@ use std::thread;
 use std::time;
 use std::os::unix::io::AsRawFd;
 use tokio_core::reactor::Core;
-use tokio_io::AsyncRead;
-use tokio_io::codec::length_delimited::{FramedRead, FramedWrite};
-use tokio_io::io::{ReadHalf, WriteHalf};
-use tokio_serde_bincode::{ReadBincode, WriteBincode};
 use tokio_uds::UnixStream;
 
 use super::*;
+use codecs::{self, Deserializer, Serializer};
 
-
-type Ser = WriteBincode<FramedWrite<WriteHalf<UnixStream>>, ClientMessage>;
-type De = ReadBincode<FramedRead<ReadHalf<UnixStream>>, ServerMessage>;
+type Ser = Serializer<ClientMessage>;
+type De = Deserializer<ServerMessage>;
 type UserInputStream = Box<Stream<Item = Vec<u8>, Error = io::Error>>;
 type UserOutputSink = Box<Sink<SinkItem = Vec<u8>, SinkError = io::Error>>;
 
@@ -83,11 +79,7 @@ impl Connection {
                              mem::size_of::<libc::linger>() as libc::socklen_t);
         }
 
-        let (read, write) = conn.split();
-        let wdelim = FramedWrite::new(write);
-        let ser = WriteBincode::new(wdelim);
-        let rdelim = FramedRead::new(read);
-        let de = ReadBincode::new(rdelim);
+        let (ser, de) = codecs::split(conn);
 
         Ok(Some(Connection {
             core: core,

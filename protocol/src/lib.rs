@@ -14,12 +14,14 @@
 //! defined in this main module. The [`client`] submodule implements the
 //! client protocol.
 
+extern crate bytes;
 #[macro_use] extern crate failure;
 #[macro_use] extern crate futures;
 extern crate libc;
 extern crate serde;
 #[macro_use] extern crate serde_derive;
 #[macro_use] extern crate state_machine_future;
+extern crate tokio_codec;
 extern crate tokio_core;
 extern crate tokio_io;
 extern crate tokio_serde_bincode;
@@ -29,6 +31,7 @@ use failure::Error;
 use std::env;
 use std::path::PathBuf;
 
+pub mod codecs;
 pub mod client;
 
 
