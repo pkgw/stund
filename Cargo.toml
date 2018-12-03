@@ -24,7 +24,7 @@ failure = "0.1"
 futures = "0.1"
 libc = "0.2"
 rand = "0.6"
-state_machine_future = "0.1"
+state_machine_future = "0.2"
 structopt = "0.2"
 stund_protocol = { path = "protocol", version = "0.1.3" }
 tokio-borrow-stdio = { path = "tokio-borrow-stdio", version = "0.1.0" }
