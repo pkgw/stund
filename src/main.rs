@@ -14,6 +14,7 @@ extern crate rand;
 #[macro_use] extern crate structopt;
 extern crate stund_protocol;
 extern crate tokio_borrow_stdio;
+extern crate tokio_codec;
 extern crate tokio_core;
 extern crate tokio_io;
 extern crate tokio_pty_process;

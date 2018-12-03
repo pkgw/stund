@@ -25,20 +25,17 @@ use std::path::PathBuf;
 use std::process::ExitStatus;
 use std::sync::{Arc, Mutex};
 use stund_protocol::*;
+use stund_protocol::codecs::{Deserializer, FailureBytesCodec, Serializer, split};
+use tokio_codec::{Decoder, Framed};
 use tokio_core::reactor::{Core, Handle};
-use tokio_io::AsyncRead;
-use tokio_io::codec::length_delimited::{FramedRead, FramedWrite};
-use tokio_io::codec::{BytesCodec, Framed};
-use tokio_io::io::{ReadHalf, WriteHalf};
 use tokio_pty_process::{AsyncPtyMaster, Child, CommandExt};
-use tokio_serde_bincode::{ReadBincode, WriteBincode};
 use tokio_signal;
 use tokio_uds::{UnixListener, UnixStream};
 
 use super::*;
 
-type Ser = WriteBincode<FramedWrite<WriteHalf<UnixStream>>, ServerMessage>;
-type De = ReadBincode<FramedRead<ReadHalf<UnixStream>>, ClientMessage>;
+type Ser = Serializer<ServerMessage>;
+type De = Deserializer<ClientMessage>;
 
 
 const FATAL_SIGNALS: &[i32] = &[
@@ -192,8 +189,8 @@ impl State {
 
 // Supporting jazz for managing SSH processes
 
-type PtyStream = SplitStream<Framed<AsyncPtyMaster, BytesCodec>>;
-type PtySink = SplitSink<Framed<AsyncPtyMaster, BytesCodec>>;
+type PtyStream = SplitStream<Framed<AsyncPtyMaster, FailureBytesCodec>>;
+type PtySink = SplitSink<Framed<AsyncPtyMaster, FailureBytesCodec>>;
 
 enum TunnelState {
     /// An SSH process that we have launched and is, as far as we know, still
@@ -326,11 +323,7 @@ fn process_client(
                          mem::size_of::<libc::linger>() as libc::socklen_t);
     }
 
-    let (read, write) = socket.split();
-    let wdelim = FramedWrite::new(write);
-    let ser = WriteBincode::new(wdelim);
-    let rdelim = FramedRead::new(read);
-    let de = ReadBincode::new(rdelim);
+    let (ser, de) = split(socket);
 
     let handle2 = handle.clone();
     let shared2 = shared.clone();
@@ -673,7 +666,7 @@ fn process_open_command(
     fn inner(
         common: &ClientCommonState, params: &OpenParameters,
         tx_die: mpsc::Sender<Option<ExitStatus>>, key: &str
-    ) -> Result<Framed<AsyncPtyMaster, BytesCodec>, Error> {
+    ) -> Result<Framed<AsyncPtyMaster, FailureBytesCodec>, Error> {
         let (tx_kill, rx_kill) = oneshot::channel();
         let ptymaster = AsyncPtyMaster::open().context("failed to create PTY")?;
 
@@ -702,7 +695,7 @@ fn process_open_command(
             tx_kill: tx_kill,
         });
 
-        Ok(ptymaster.framed(BytesCodec::new()))
+        Ok(FailureBytesCodec::new().framed(ptymaster))
     }
 
     match inner(&common, &params, tx_die, &key) {
