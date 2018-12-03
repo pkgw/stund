@@ -15,13 +15,16 @@ categories = ["asynchronous"]
 license = "MIT"
 
 [dependencies]
+bytes = "0.4"
+dirs = "1.0"
 failure = "0.1"
 futures = "0.1"
 libc = "0.2"
-serde = "=1.0.55" # .62-ish breaks docs.rs build with i128 types
-serde_derive = "=1.0.55"
+serde = "1.0"
+serde_derive = "1.0"
 state_machine_future = "0.1"
+tokio-codec = "0.1"
 tokio-core = "0.1"
 tokio-io = "0.1"
-tokio-serde-bincode = "0.1"
+tokio-serde-bincode = "0.2"
 tokio-uds = "0.1"

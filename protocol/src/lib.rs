@@ -14,21 +14,24 @@
 //! defined in this main module. The [`client`] submodule implements the
 //! client protocol.
 
+extern crate bytes;
+extern crate dirs;
 #[macro_use] extern crate failure;
 #[macro_use] extern crate futures;
 extern crate libc;
 extern crate serde;
 #[macro_use] extern crate serde_derive;
 #[macro_use] extern crate state_machine_future;
+extern crate tokio_codec;
 extern crate tokio_core;
 extern crate tokio_io;
 extern crate tokio_serde_bincode;
 extern crate tokio_uds;
 
 use failure::Error;
-use std::env;
 use std::path::PathBuf;
 
+pub mod codecs;
 pub mod client;
 
 
@@ -36,7 +39,7 @@ pub mod client;
 ///
 /// At the moment, this is fixed to `$HOME/.ssh/stund.sock`.
 pub fn get_socket_path() -> Result<PathBuf, Error> {
-    let mut p = env::home_dir().ok_or(format_err!("unable to determine your home directory"))?;
+    let mut p = dirs::home_dir().ok_or(format_err!("unable to determine your home directory"))?;
     p.push(".ssh");
     p.push("stund.sock");
     Ok(p)
