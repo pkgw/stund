@@ -15,6 +15,7 @@
 //! client protocol.
 
 extern crate bytes;
+extern crate dirs;
 #[macro_use] extern crate failure;
 #[macro_use] extern crate futures;
 extern crate libc;
@@ -28,7 +29,6 @@ extern crate tokio_serde_bincode;
 extern crate tokio_uds;
 
 use failure::Error;
-use std::env;
 use std::path::PathBuf;
 
 pub mod codecs;
@@ -39,7 +39,7 @@ pub mod client;
 ///
 /// At the moment, this is fixed to `$HOME/.ssh/stund.sock`.
 pub fn get_socket_path() -> Result<PathBuf, Error> {
-    let mut p = env::home_dir().ok_or(format_err!("unable to determine your home directory"))?;
+    let mut p = dirs::home_dir().ok_or(format_err!("unable to determine your home directory"))?;
     p.push(".ssh");
     p.push("stund.sock");
     Ok(p)

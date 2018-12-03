@@ -16,6 +16,7 @@ license = "MIT"
 
 [dependencies]
 bytes = "0.4"
+dirs = "1.0"
 failure = "0.1"
 futures = "0.1"
 libc = "0.2"
