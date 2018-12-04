@@ -763,7 +763,7 @@ dependencies = [
  "tokio-core 0.1.17 (registry+https://github.com/rust-lang/crates.io-index)",
  "tokio-io 0.1.10 (registry+https://github.com/rust-lang/crates.io-index)",
  "tokio-pty-process 0.3.0",
- "tokio-serde-bincode 0.2.0 (registry+https://github.com/rust-lang/crates.io-index)",
+ "tokio-serde-bincode 0.2.1 (registry+https://github.com/rust-lang/crates.io-index)",
  "tokio-signal 0.1.5 (registry+https://github.com/rust-lang/crates.io-index)",
  "tokio-uds 0.1.7 (registry+https://github.com/rust-lang/crates.io-index)",
 ]
@@ -783,7 +783,7 @@ dependencies = [
  "tokio-codec 0.1.1 (registry+https://github.com/rust-lang/crates.io-index)",
  "tokio-core 0.1.17 (registry+https://github.com/rust-lang/crates.io-index)",
  "tokio-io 0.1.10 (registry+https://github.com/rust-lang/crates.io-index)",
- "tokio-serde-bincode 0.2.0 (registry+https://github.com/rust-lang/crates.io-index)",
+ "tokio-serde-bincode 0.2.1 (registry+https://github.com/rust-lang/crates.io-index)",
  "tokio-uds 0.1.7 (registry+https://github.com/rust-lang/crates.io-index)",
 ]
 
@@ -961,7 +961,7 @@ dependencies = [
 
 [[package]]
 name = "tokio-serde-bincode"
-version = "0.2.0"
+version = "0.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 dependencies = [
  "bincode 1.0.1 (registry+https://github.com/rust-lang/crates.io-index)",
@@ -1262,7 +1262,7 @@ dependencies = [
 "checksum tokio-io 0.1.10 (registry+https://github.com/rust-lang/crates.io-index)" = "7392fe0a70d5ce0c882c4778116c519bd5dbaa8a7c3ae3d04578b3afafdcda21"
 "checksum tokio-reactor 0.1.7 (registry+https://github.com/rust-lang/crates.io-index)" = "502b625acb4ee13cbb3b90b8ca80e0addd263ddacf6931666ef751e610b07fb5"
 "checksum tokio-serde 0.3.0 (registry+https://github.com/rust-lang/crates.io-index)" = "886e6a07c1e428caa145342221bbd41b4322ba52e620d392136d2c2e1cb1b8a7"
-"checksum tokio-serde-bincode 0.2.0 (registry+https://github.com/rust-lang/crates.io-index)" = "34a0bfe8373eca1e736665f53dd675065654cd0ff87f2ec7c2fdf9d802be9bfd"
+"checksum tokio-serde-bincode 0.2.1 (registry+https://github.com/rust-lang/crates.io-index)" = "51a2cb8c8d84f1a90215b9955832bef38585e82a75a33ac3784117140358b6c7"
 "checksum tokio-signal 0.1.5 (registry+https://github.com/rust-lang/crates.io-index)" = "e8f46863230f9a05cf52d173721ec391b9c5782a2465f593029922b8782b9ffe"
 "checksum tokio-signal 0.2.7 (registry+https://github.com/rust-lang/crates.io-index)" = "dd6dc5276ea05ce379a16de90083ec80836440d5ef8a6a39545a3207373b8296"
 "checksum tokio-tcp 0.1.2 (registry+https://github.com/rust-lang/crates.io-index)" = "7ad235e9dadd126b2d47f6736f65aa1fdcd6420e66ca63f44177bc78df89f912"
