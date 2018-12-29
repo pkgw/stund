@@ -15,15 +15,13 @@ extern crate futures;
 extern crate tokio_core;
 extern crate tokio_io;
 
-
-use futures::{Async, AsyncSink, Future, Poll, Sink, StartSend, Stream};
 use futures::future::{Either, Loop};
 use futures::sink::Send;
 use futures::sync::{mpsc, oneshot};
+use futures::{Async, AsyncSink, Future, Poll, Sink, StartSend, Stream};
 use std::io::{self, Error, ErrorKind, Read, Write};
 use std::thread;
 use tokio_core::reactor::Core;
-
 
 type StdioPacket = Result<Vec<u8>, Error>;
 
@@ -35,7 +33,6 @@ struct StdinState<'a> {
     rx_stdin_stop: oneshot::Receiver<()>,
 }
 
-
 /// "Borrow" the stdio streams to make them accessible to Tokio.
 ///
 /// We make a best effort to clean up after the inner function is done, but
@@ -43,7 +40,8 @@ struct StdinState<'a> {
 /// it is stuck blocking on a stdin read. It is therefore possible that a
 /// chunk of stdin I/O will be lost.
 pub fn borrow_stdio<F, T>(f: F) -> Result<T, Error>
-    where F: FnOnce(StdinStream, StdoutSink) -> Result<T, Error>
+where
+    F: FnOnce(StdinStream, StdoutSink) -> Result<T, Error>,
 {
     let (tx_stdin_data, rx_stdin_data) = mpsc::channel(1);
     let (tx_stdin_stop, rx_stdin_stop) = oneshot::channel::<()>();
@@ -120,9 +118,9 @@ pub fn borrow_stdio<F, T>(f: F) -> Result<T, Error>
                 Ok(Some(data)) => {
                     let _r = stdout_lock.write(&data);
                     let _r = stdout_lock.flush();
-                },
+                }
 
-                Err(_) => {},
+                Err(_) => {}
             };
         }
     });
@@ -136,7 +134,6 @@ pub fn borrow_stdio<F, T>(f: F) -> Result<T, Error>
     let _r = tx_stdout_cmd.send(None);
     r
 }
-
 
 /// A futures-based stream of bytes from standard input.
 #[derive(Debug)]
@@ -154,29 +151,26 @@ impl Stream for StdinStream {
 
             Ok(Async::Ready(None)) => Ok(Async::Ready(None)),
 
-            Ok(Async::Ready(Some(io_res))) => {
-                match io_res {
-                    Ok(data) => {
-                        if data.len() == 0 {
-                            Ok(Async::Ready(None))
-                        } else {
-                            Ok(Async::Ready(Some(data)))
-                        }
-                    },
-
-                    Err(e) => {
-                        if e.kind() == ErrorKind::UnexpectedEof {
-                            Ok(Async::Ready(None))
-                        } else {
-                            Err(e)
-                        }
+            Ok(Async::Ready(Some(io_res))) => match io_res {
+                Ok(data) => {
+                    if data.len() == 0 {
+                        Ok(Async::Ready(None))
+                    } else {
+                        Ok(Async::Ready(Some(data)))
                     }
                 }
-            }
+
+                Err(e) => {
+                    if e.kind() == ErrorKind::UnexpectedEof {
+                        Ok(Async::Ready(None))
+                    } else {
+                        Err(e)
+                    }
+                }
+            },
         }
     }
 }
-
 
 /// A futures-based sink of bytes intended for standard output.
 ///

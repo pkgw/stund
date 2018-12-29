@@ -6,11 +6,14 @@
 extern crate atty;
 extern crate base64;
 extern crate daemonize;
-#[macro_use] extern crate failure;
-#[macro_use] extern crate futures;
+#[macro_use]
+extern crate failure;
+#[macro_use]
+extern crate futures;
 extern crate libc;
 extern crate rand;
-#[macro_use] extern crate state_machine_future;
+#[macro_use]
+extern crate state_machine_future;
 extern crate structopt;
 extern crate stund_protocol;
 extern crate tokio_borrow_stdio;
@@ -28,11 +31,10 @@ use std::mem;
 use std::os::unix::process::CommandExt;
 use std::process;
 use structopt::StructOpt;
-use stund_protocol::*;
 use stund_protocol::client::Connection;
+use stund_protocol::*;
 
 mod daemon;
-
 
 #[derive(Debug, StructOpt)]
 pub struct StundCloseOptions {
@@ -42,24 +44,25 @@ pub struct StundCloseOptions {
 
 impl StundCloseOptions {
     fn cli(self) -> Result<i32, Error> {
-        let params = CloseParameters { host: self.host.clone() };
+        let params = CloseParameters {
+            host: self.host.clone(),
+        };
 
         let conn = Connection::establish()?;
         let (result, conn) = conn.send_close(params)?;
 
         match result {
-            CloseResult::Success => {},
+            CloseResult::Success => {}
 
             CloseResult::NotOpen => {
                 println!("[No tunnel for \"{}\" was open.]", self.host);
-            },
+            }
         }
 
         conn.close()?;
         Ok(0)
     }
 }
-
 
 #[derive(Debug, StructOpt)]
 pub struct StundDaemonOptions {
@@ -75,10 +78,8 @@ impl StundDaemonOptions {
     }
 }
 
-
 #[derive(Debug, StructOpt)]
-pub struct StundExitOptions {
-}
+pub struct StundExitOptions {}
 
 impl StundExitOptions {
     fn cli(self) -> Result<i32, Error> {
@@ -88,7 +89,7 @@ impl StundExitOptions {
             None => {
                 println!("[Daemon not running; doing nothing.]");
                 return Ok(0);
-            },
+            }
         };
 
         let conn = conn.send_exit()?;
@@ -96,7 +97,6 @@ impl StundExitOptions {
         Ok(0)
     }
 }
-
 
 #[derive(Debug, StructOpt)]
 pub struct StundOpenOptions {
@@ -115,7 +115,6 @@ pub struct StundOpenOptions {
     #[structopt(raw(last = "true"), value_name = "after-command")]
     /// If specified, exec this command after opening the tunnel
     after_command: Vec<String>,
-
     // TODO? keepalive option/config setting for tunnels that can/should be
     // restarted by the daemon if the SSH process dies; i.e. ones that do not
     // need interactive authentication to establish. Note that the daemon can
@@ -126,7 +125,9 @@ pub struct StundOpenOptions {
 
 impl StundOpenOptions {
     fn cli(self) -> Result<i32, Error> {
-        let params = OpenParameters { host: self.host.clone() };
+        let params = OpenParameters {
+            host: self.host.clone(),
+        };
 
         let conn = Connection::establish()?;
 
@@ -134,10 +135,12 @@ impl StundOpenOptions {
             // Big hack: we just ignore any output that we ought to print.
             use futures::Sink;
             let mut buf = Vec::new();
-            conn.send_open(params,
-                           buf.sink_map_err(|_| io::ErrorKind::Other.into()),
-                           futures::stream::empty())
-                .map_err(|_| io::ErrorKind::Other.into())
+            conn.send_open(
+                params,
+                buf.sink_map_err(|_| io::ErrorKind::Other.into()),
+                futures::stream::empty(),
+            )
+            .map_err(|_| io::ErrorKind::Other.into())
         } else {
             toggle_terminal_echo(false);
             let r = tokio_borrow_stdio::borrow_stdio(|stdin, stdout| {
@@ -155,13 +158,13 @@ impl StundOpenOptions {
                 if !self.quiet {
                     println!("[Tunnel successfully opened.]");
                 }
-            },
+            }
 
             OpenResult::AlreadyOpen => {
                 if !self.quiet {
                     println!("[Tunnel is already open.]");
                 }
-            },
+            }
         }
 
         conn.close()?;
@@ -175,20 +178,18 @@ impl StundOpenOptions {
 
         if self.after_command.len() > 0 {
             return Err(process::Command::new(&self.after_command[0])
-                       .args(&self.after_command[1..])
-                       .exec()
-                       .context("failed to exec post-open command")
-                       .into());
+                .args(&self.after_command[1..])
+                .exec()
+                .context("failed to exec post-open command")
+                .into());
         }
 
         Ok(0)
     }
 }
 
-
 #[derive(Debug, StructOpt)]
-pub struct StundStatusOptions {
-}
+pub struct StundStatusOptions {}
 
 impl StundStatusOptions {
     fn cli(self) -> Result<i32, Error> {
@@ -198,7 +199,7 @@ impl StundStatusOptions {
             None => {
                 println!("Daemon is not running.");
                 return Ok(0);
-            },
+            }
         };
 
         let (info, conn) = conn.query_status()?;
@@ -224,7 +225,6 @@ impl StundStatusOptions {
         Ok(0)
     }
 }
-
 
 #[derive(Debug, StructOpt)]
 #[structopt(name = "stund", about = "Maintain SSH tunnels in the background.")]
@@ -262,7 +262,6 @@ impl StundCli {
     }
 }
 
-
 fn main() {
     let program = StundCli::from_args();
 
@@ -275,10 +274,9 @@ fn main() {
                 eprintln!("  caused by: {}", cause);
             }
             1
-        },
+        }
     });
 }
-
 
 fn toggle_terminal_echo(active: bool) {
     if atty::isnt(atty::Stream::Stdout) {
