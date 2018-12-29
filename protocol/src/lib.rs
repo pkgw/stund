@@ -16,12 +16,16 @@
 
 extern crate bytes;
 extern crate dirs;
-#[macro_use] extern crate failure;
-#[macro_use] extern crate futures;
+#[macro_use]
+extern crate failure;
+#[macro_use]
+extern crate futures;
 extern crate libc;
 extern crate serde;
-#[macro_use] extern crate serde_derive;
-#[macro_use] extern crate state_machine_future;
+#[macro_use]
+extern crate serde_derive;
+#[macro_use]
+extern crate state_machine_future;
 extern crate tokio_codec;
 extern crate tokio_core;
 extern crate tokio_io;
@@ -31,9 +35,8 @@ extern crate tokio_uds;
 use failure::Error;
 use std::path::PathBuf;
 
-pub mod codecs;
 pub mod client;
-
+pub mod codecs;
 
 /// Get the path to the Unix domain socket used for client/server communication.
 ///
@@ -44,7 +47,6 @@ pub fn get_socket_path() -> Result<PathBuf, Error> {
     p.push("stund.sock");
     Ok(p)
 }
-
 
 /// A message that the client may send to the server.
 ///
@@ -69,7 +71,6 @@ pub enum ClientMessage {
     /// End the session.
     Goodbye,
 }
-
 
 /// A message that the server may send to the client.
 #[derive(Debug, Deserialize, PartialEq, Serialize)]
@@ -98,7 +99,6 @@ pub enum ServerMessage {
     StatusResponse(StatusInformation),
 }
 
-
 /// Parameters to the "Open" command.
 ///
 /// This command takes only a single parameter. The model of `stund` is that
@@ -124,7 +124,6 @@ pub enum OpenResult {
     AlreadyOpen,
 }
 
-
 /// Parameters to the "Close" command.
 #[derive(Debug, Deserialize, PartialEq, Serialize)]
 pub struct CloseParameters {
@@ -145,7 +144,6 @@ pub enum CloseResult {
     /// host was open.
     NotOpen,
 }
-
 
 /// Information about the current status of the server.
 #[derive(Debug, Deserialize, PartialEq, Serialize)]

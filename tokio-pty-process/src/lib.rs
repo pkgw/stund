@@ -38,12 +38,12 @@ extern crate mio;
 extern crate tokio;
 extern crate tokio_signal;
 
-use futures::{Async, Future, Poll, Stream};
 use futures::future::FlattenStream;
+use futures::{Async, Future, Poll, Stream};
 use libc::c_int;
+use mio::event::Evented;
 use mio::unix::{EventedFd, UnixReady};
 use mio::{PollOpt, Ready, Token};
-use mio::event::Evented;
 use std::ffi::{CStr, OsStr};
 use std::fmt;
 use std::fs::{File, OpenOptions};
@@ -52,11 +52,10 @@ use std::mem;
 use std::os::unix::prelude::*;
 use std::os::unix::process::CommandExt as StdUnixCommandExt;
 use std::process::{self, ExitStatus};
-use tokio::io::{AsyncWrite, AsyncRead};
+use tokio::io::{AsyncRead, AsyncWrite};
+use tokio::reactor::PollEvented2;
 use tokio_signal::unix::Signal;
 use tokio_signal::IoFuture;
-use tokio::reactor::{PollEvented2};
-
 
 // First set of hoops to jump through: a read-write pseudo-terminal master
 // with full async support. As far as I can tell, we need to create an inner
@@ -89,25 +88,30 @@ impl Write for AsyncPtyFile {
 }
 
 impl Evented for AsyncPtyFile {
-    fn register(&self, poll: &mio::Poll, token: Token, interest: Ready, opts: PollOpt) -> io::Result<()> {
-        EventedFd(&self.0.as_raw_fd()).register(poll,
-                                                token,
-                                                interest | UnixReady::hup(),
-                                                opts)
+    fn register(
+        &self,
+        poll: &mio::Poll,
+        token: Token,
+        interest: Ready,
+        opts: PollOpt,
+    ) -> io::Result<()> {
+        EventedFd(&self.0.as_raw_fd()).register(poll, token, interest | UnixReady::hup(), opts)
     }
 
-    fn reregister(&self, poll: &mio::Poll, token: Token, interest: Ready, opts: PollOpt) -> io::Result<()> {
-        EventedFd(&self.0.as_raw_fd()).reregister(poll,
-                                                  token,
-                                                  interest | UnixReady::hup(),
-                                                  opts)
+    fn reregister(
+        &self,
+        poll: &mio::Poll,
+        token: Token,
+        interest: Ready,
+        opts: PollOpt,
+    ) -> io::Result<()> {
+        EventedFd(&self.0.as_raw_fd()).reregister(poll, token, interest | UnixReady::hup(), opts)
     }
 
     fn deregister(&self, poll: &mio::Poll) -> io::Result<()> {
         EventedFd(&self.0.as_raw_fd()).deregister(poll)
     }
 }
-
 
 /// A handle to a pseudo-TTY master that can be interacted with
 /// asynchronously.
@@ -155,7 +159,7 @@ impl AsyncPtyMaster {
                 return Err(io::Error::last_os_error());
             }
         }
-        #[cfg(any(target_os = "macos", target_os="freebsd"))]
+        #[cfg(any(target_os = "macos", target_os = "freebsd"))]
         unsafe {
             let st = libc::ptsname(fd);
             if st.is_null() {
@@ -181,8 +185,7 @@ impl Read for AsyncPtyMaster {
     }
 }
 
-impl AsyncRead for AsyncPtyMaster {
-}
+impl AsyncRead for AsyncPtyMaster {}
 
 impl Write for AsyncPtyMaster {
     fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
@@ -199,7 +202,6 @@ impl AsyncWrite for AsyncPtyMaster {
         self.0.shutdown()
     }
 }
-
 
 // Now, the async-ified child process framework.
 
@@ -266,7 +268,7 @@ impl Child {
         loop {
             if let Some(e) = self.try_wait()? {
                 self.reaped = true;
-                return Ok(e.into())
+                return Ok(e.into());
             }
 
             // If the child hasn't exited yet, then it's our responsibility to
@@ -276,7 +278,7 @@ impl Child {
             // As described in `spawn` above, we just indicate that we can
             // next make progress once a SIGCHLD is received.
             if self.sigchld.poll()?.is_not_ready() {
-                return Ok(Async::NotReady)
+                return Ok(Async::NotReady);
             }
         }
     }
@@ -292,20 +294,19 @@ impl Child {
                 n if n < 0 => {
                     let err = io::Error::last_os_error();
                     if err.kind() == io::ErrorKind::Interrupted {
-                        continue
+                        continue;
                     }
-                    return Err(err)
-                },
+                    return Err(err);
+                }
 
                 n => {
                     assert_eq!(n, id);
-                    return Ok(Some(ExitStatus::from_raw(status)))
-                },
+                    return Ok(Some(ExitStatus::from_raw(status)));
+                }
             }
         }
     }
 }
-
 
 impl Future for Child {
     type Item = ExitStatus;
@@ -316,7 +317,6 @@ impl Future for Child {
     }
 }
 
-
 impl Drop for Child {
     fn drop(&mut self) {
         if self.kill_on_drop {
@@ -324,7 +324,6 @@ impl Drop for Child {
         }
     }
 }
-
 
 /// A private trait for the extending `std::process::Command`.
 trait CommandExtInternal {
@@ -381,7 +380,6 @@ impl CommandExtInternal for process::Command {
         Ok(Child::new(self.spawn()?))
     }
 }
-
 
 /// An extension trait for the `std::process::Command` type.
 ///

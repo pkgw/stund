@@ -6,10 +6,10 @@
 use base64;
 use daemonize;
 use failure::{Error, ResultExt};
-use futures::{Async, AsyncSink, Future, Poll, Sink, Stream};
 use futures::sink::Send;
 use futures::stream::{SplitSink, SplitStream, StreamFuture};
 use futures::sync::{mpsc, oneshot};
+use futures::{Async, AsyncSink, Future, Poll, Sink, Stream};
 use libc;
 use rand::{self, RngCore};
 use state_machine_future::RentToOwn;
@@ -24,8 +24,8 @@ use std::os::unix::net::{SocketAddr, UnixStream as StdUnixStream};
 use std::path::PathBuf;
 use std::process::ExitStatus;
 use std::sync::{Arc, Mutex};
+use stund_protocol::codecs::{split, Deserializer, FailureBytesCodec, Serializer};
 use stund_protocol::*;
-use stund_protocol::codecs::{Deserializer, FailureBytesCodec, Serializer, split};
 use tokio_codec::{Decoder, Framed};
 use tokio_core::reactor::{Core, Handle};
 use tokio_pty_process::{AsyncPtyMaster, Child, CommandExt};
@@ -36,7 +36,6 @@ use super::*;
 
 type Ser = Serializer<ServerMessage>;
 type De = Deserializer<ClientMessage>;
-
 
 const FATAL_SIGNALS: &[i32] = &[
     libc::SIGABRT,
@@ -50,7 +49,6 @@ const FATAL_SIGNALS: &[i32] = &[
     libc::SIGTERM,
     libc::SIGTRAP,
 ];
-
 
 pub struct State {
     sock_path: PathBuf,
@@ -69,23 +67,25 @@ impl State {
         let p = get_socket_path()?;
 
         if StdUnixStream::connect(&p).is_ok() {
-            return Err(format_err!("refusing to start: another daemon is already running"));
+            return Err(format_err!(
+                "refusing to start: another daemon is already running"
+            ));
         }
 
         match fs::remove_file(&p) {
-            Ok(_) => {},
-            Err(e) => {
-                match e.kind() {
-                    io::ErrorKind::NotFound => {},
-                    _ => {
-                        return Err(e.into());
-                    },
+            Ok(_) => {}
+            Err(e) => match e.kind() {
+                io::ErrorKind::NotFound => {}
+                _ => {
+                    return Err(e.into());
                 }
             },
         }
 
         // Make sure our socket and logs will be only accessible to us!
-        unsafe { libc::umask(0o177); }
+        unsafe {
+            libc::umask(0o177);
+        }
 
         let log: Box<Write + StdSend> = if opts.foreground {
             println!("stund daemon: staying in foreground");
@@ -107,13 +107,11 @@ impl State {
         })
     }
 
-
     /// Don't use this directly; use the log!() macro.
     fn log_items(&mut self, args: fmt::Arguments) {
         let _r = writeln!(self.log, "{}", args);
         let _r = self.log.flush();
     }
-
 
     pub fn serve(mut self) -> Result<(), Error> {
         let mut core = Core::new()?;
@@ -149,12 +147,10 @@ impl State {
             let shared2 = shared.clone();
             let tx_exit2 = tx_exit.clone();
 
-            let stream = sig_stream
-                .map_err(|_| {})
-                .and_then(move |sig| {
-                    log!(shared2.lock().unwrap(), "exiting on signal {}", sig);
-                    tx_exit2.clone().send(()).map_err(|_| {})
-                });
+            let stream = sig_stream.map_err(|_| {}).and_then(move |sig| {
+                log!(shared2.lock().unwrap(), "exiting on signal {}", sig);
+                tx_exit2.clone().send(()).map_err(|_| {})
+            });
 
             let fut = stream.into_future().map(|_| {}).map_err(|_| {});
 
@@ -167,12 +163,15 @@ impl State {
         let handle2 = handle.clone();
         let tx_exit2 = tx_exit.clone();
 
-        let server = listener.incoming().for_each(move |(socket, sockaddr)| {
-            process_client(&handle2, socket, sockaddr, shared.clone(), tx_exit2.clone());
-            Ok(())
-        }).map_err(move |err| {
-            log!(shared3.lock().unwrap(), "accept error: {:?}", err);
-        });
+        let server = listener
+            .incoming()
+            .for_each(move |(socket, sockaddr)| {
+                process_client(&handle2, socket, sockaddr, shared.clone(), tx_exit2.clone());
+                Ok(())
+            })
+            .map_err(move |err| {
+                log!(shared3.lock().unwrap(), "accept error: {:?}", err);
+            });
 
         handle.spawn(server);
 
@@ -186,7 +185,6 @@ impl State {
     }
 }
 
-
 // Supporting jazz for managing SSH processes
 
 type PtyStream = SplitStream<Framed<AsyncPtyMaster, FailureBytesCodec>>;
@@ -195,18 +193,13 @@ type PtySink = SplitSink<Framed<AsyncPtyMaster, FailureBytesCodec>>;
 enum TunnelState {
     /// An SSH process that we have launched and is, as far as we know, still
     /// running.
-    Running {
-        tx_kill: oneshot::Sender<()>,
-    },
+    Running { tx_kill: oneshot::Sender<()> },
 
     /// An SSH process that we launched but is now dead. If the exit status is
     /// `None`, we explicitly killed it; otherwise, it's whatever status the
     /// process died with.
-    Exited {
-        status: Option<ExitStatus>,
-    },
+    Exited { status: Option<ExitStatus> },
 }
-
 
 #[derive(StateMachineFuture)]
 #[allow(unused)] // get lots of these spuriously; custom derive stuff?
@@ -234,12 +227,12 @@ enum ChildMonitor {
 
 impl PollChildMonitor for ChildMonitor {
     fn poll_awaiting_child_event<'a>(
-        state: &'a mut RentToOwn<'a, AwaitingChildEvent>
+        state: &'a mut RentToOwn<'a, AwaitingChildEvent>,
     ) -> Poll<AfterAwaitingChildEvent, ()> {
         match state.child.poll() {
             Err(_) => {
                 return Err(());
-            },
+            }
 
             Ok(Async::Ready(status)) => {
                 // Child died! We no longer care about any kill messages, but
@@ -248,22 +241,32 @@ impl PollChildMonitor for ChildMonitor {
                 let mut state = state.take();
                 {
                     let mut sh = state.shared.lock().unwrap();
-                    log!(sh, "SSH child for {} unexpectedly died: {:?}", state.key, status);
-                    sh.children.insert(state.key, TunnelState::Exited { status: Some(status) });
+                    log!(
+                        sh,
+                        "SSH child for {} unexpectedly died: {:?}",
+                        state.key,
+                        status
+                    );
+                    sh.children.insert(
+                        state.key,
+                        TunnelState::Exited {
+                            status: Some(status),
+                        },
+                    );
                 }
                 state.rx_kill.close();
                 transition!(NotifyingChildDied {
                     tx_die: state.tx_die.send(Some(status)),
                 });
-            },
+            }
 
-            Ok(Async::NotReady) => {},
+            Ok(Async::NotReady) => {}
         }
 
         match state.rx_kill.poll() {
             Err(_) => {
                 return Err(());
-            },
+            }
 
             Ok(Async::Ready(_)) => {
                 // We've been told to kill the child.
@@ -271,45 +274,48 @@ impl PollChildMonitor for ChildMonitor {
                 {
                     let mut sh = state.shared.lock().unwrap();
                     log!(sh, "ordered to kill SSH child for {}", state.key);
-                    sh.children.insert(state.key, TunnelState::Exited { status: None });
+                    sh.children
+                        .insert(state.key, TunnelState::Exited { status: None });
                 }
                 let _r = state.child.kill(); // can't do anything if this fails
                 state.rx_kill.close();
                 transition!(NotifyingChildDied {
                     tx_die: state.tx_die.send(None),
                 });
-            },
+            }
 
-            Ok(Async::NotReady) => {},
+            Ok(Async::NotReady) => {}
         }
 
         Ok(Async::NotReady)
     }
 
     fn poll_notifying_child_died<'a>(
-        state: &'a mut RentToOwn<'a, NotifyingChildDied>
+        state: &'a mut RentToOwn<'a, NotifyingChildDied>,
     ) -> Poll<AfterNotifyingChildDied, ()> {
         match state.tx_die.poll() {
             Err(_) => {
                 return Err(());
-            },
+            }
 
             Ok(Async::Ready(_)) => {
                 transition!(ChildReaped(()));
-            },
+            }
 
             Ok(Async::NotReady) => {
                 return Ok(Async::NotReady);
-            },
+            }
         }
     }
 }
 
-
 // Oh right we actually want to handle clients too
 
 fn process_client(
-    handle: &Handle, socket: UnixStream, addr: SocketAddr, shared: Arc<Mutex<State>>,
+    handle: &Handle,
+    socket: UnixStream,
+    addr: SocketAddr,
+    shared: Arc<Mutex<State>>,
     tx_exit: mpsc::Sender<()>,
 ) {
     // Without turning on linger, I find that the tokio-ized version loses
@@ -317,10 +323,17 @@ fn process_client(
     // of setsockopt(), though.
 
     unsafe {
-        let linger = libc::linger { l_onoff: 1, l_linger: 2 };
-        libc::setsockopt(socket.as_raw_fd(), libc::SOL_SOCKET, libc::SO_LINGER,
-                         (&linger as *const libc::linger) as _,
-                         mem::size_of::<libc::linger>() as libc::socklen_t);
+        let linger = libc::linger {
+            l_onoff: 1,
+            l_linger: 2,
+        };
+        libc::setsockopt(
+            socket.as_raw_fd(),
+            libc::SOL_SOCKET,
+            libc::SO_LINGER,
+            (&linger as *const libc::linger) as _,
+            mem::size_of::<libc::linger>() as libc::socklen_t,
+        );
     }
 
     let (ser, de) = split(socket);
@@ -337,19 +350,28 @@ fn process_client(
         exit_on_close: false,
     };
 
-    let wrapped = Client::start(common, ser, de).map(move |(common, _ser, _de)| {
-        log!(shared2.lock().unwrap(), "client session finished (exit? {})", common.exit_on_close);
+    let wrapped = Client::start(common, ser, de)
+        .map(move |(common, _ser, _de)| {
+            log!(
+                shared2.lock().unwrap(),
+                "client session finished (exit? {})",
+                common.exit_on_close
+            );
 
-        if common.exit_on_close {
-            handle2.spawn(common.tx_exit.send(()).map(|_| {}).map_err(|_| {}));
-        }
-    }).map_err(move |err| {
-        log!(shared3.lock().unwrap(), "error from client session: {:?}", err);
-    });
+            if common.exit_on_close {
+                handle2.spawn(common.tx_exit.send(()).map(|_| {}).map_err(|_| {}));
+            }
+        })
+        .map_err(move |err| {
+            log!(
+                shared3.lock().unwrap(),
+                "error from client session: {:?}",
+                err
+            );
+        });
 
     handle.spawn(wrapped);
 }
-
 
 struct ClientCommonState {
     handle: Handle,
@@ -368,7 +390,10 @@ impl ClientCommonState {
 #[derive(StateMachineFuture)]
 #[allow(unused)] // get lots of these spuriously; custom derive stuff?
 enum Client {
-    #[state_machine_future(start, transitions(CommunicatingForOpen, FinalizingTxn, Finished, Aborting))]
+    #[state_machine_future(
+        start,
+        transitions(CommunicatingForOpen, FinalizingTxn, Finished, Aborting)
+    )]
     AwaitingCommand {
         common: ClientCommonState,
         tx: Ser,
@@ -421,7 +446,7 @@ enum SshKeyStatus {
 
 impl PollClient for Client {
     fn poll_awaiting_command<'a>(
-        state: &'a mut RentToOwn<'a, AwaitingCommand>
+        state: &'a mut RentToOwn<'a, AwaitingCommand>,
     ) -> Poll<AfterAwaitingCommand, Error> {
         let msg = try_ready!(state.rx.poll());
         let mut state = state.take();
@@ -430,22 +455,25 @@ impl PollClient for Client {
             None => {
                 // Stream ended. (= connection closed?)
                 transition!(Finished((state.common, state.tx, state.rx)));
-            },
+            }
 
             Some(ClientMessage::Close(params)) => {
                 return process_close_command(state.common, params, state.tx, state.rx);
-            },
+            }
 
             Some(ClientMessage::Open(params)) => {
                 return process_open_command(state.common, params, state.tx, state.rx);
-            },
+            }
 
             Some(ClientMessage::Exit) => {
                 // To be able to close out this connection in a nice way, when we get
                 // this command we set a flag that will cause the exit message to be
                 // sent on connection close.
 
-                log!(state.common.shared(), "commanded to exit after client disconnects");
+                log!(
+                    state.common.shared(),
+                    "commanded to exit after client disconnects"
+                );
                 state.common.exit_on_close = true;
                 let send = state.tx.send(ServerMessage::Ok);
 
@@ -454,19 +482,19 @@ impl PollClient for Client {
                     tx: send,
                     rx: state.rx,
                 });
-            },
+            }
 
             Some(ClientMessage::Goodbye) => {
                 transition!(Finished((state.common, state.tx, state.rx)));
-            },
+            }
 
             Some(ClientMessage::QueryStatus) => {
                 return process_status_query(state.common, state.tx, state.rx);
-            },
+            }
 
             Some(other) => {
                 return Err(format_err!("unexpected message from client: {:?}", other));
-            },
+            }
         }
     }
 
@@ -475,7 +503,7 @@ impl PollClient for Client {
     /// process interactively, while keeping tabs on whether SSH bites the
     /// dust under us.
     fn poll_communicating_for_open<'a>(
-        state: &'a mut RentToOwn<'a, CommunicatingForOpen>
+        state: &'a mut RentToOwn<'a, CommunicatingForOpen>,
     ) -> Poll<AfterCommunicatingForOpen, Error> {
         // New text from the user?
 
@@ -483,18 +511,21 @@ impl PollClient for Client {
             match msg {
                 Some(ClientMessage::UserData(data)) => {
                     state.ssh_buf.extend_from_slice(&data);
-                },
+                }
 
                 Some(other) => {
                     // Could consider aborting here, but if we didn't
                     // understand the client then probably there's
                     // something messed up about the channel.
-                    return Err(format_err!("unexpected message from the client: {:?}", other));
-                },
+                    return Err(format_err!(
+                        "unexpected message from the client: {:?}",
+                        other
+                    ));
+                }
 
                 None => {
                     return Err(format_err!("client connection unexpectedly closed"));
-                },
+                }
             }
         }
 
@@ -504,10 +535,13 @@ impl PollClient for Client {
             let outcome = match state.ssh_rx.poll() {
                 Ok(x) => x,
                 Err(e) => {
-                    let msg = format!("something went wrong communicating with the SSH process: {}", e);
+                    let msg = format!(
+                        "something went wrong communicating with the SSH process: {}",
+                        e
+                    );
                     let mut state = state.take();
                     transition!(abort_client(state.common, state.cl_tx, state.cl_rx, msg));
-                },
+                }
             };
 
             match outcome {
@@ -547,7 +581,7 @@ impl PollClient for Client {
                         }
 
                         state.cl_buf.extend_from_slice(&bytes);
-                    } else  {
+                    } else {
                         // EOF from SSH -- it has probably died.
                         let msg = format!("unexpected EOF from SSH (program died?)");
                         let mut state = state.take();
@@ -587,8 +621,12 @@ impl PollClient for Client {
         if let SshKeyStatus::FoundIt = state.ssh_key_status {
             let state = state.take();
 
-            hand_off_ssh_process(&state.common.handle, state.common.shared.clone(),
-                                 state.ssh_tx, state.ssh_rx);
+            hand_off_ssh_process(
+                &state.common.handle,
+                state.common.shared.clone(),
+                state.ssh_tx,
+                state.ssh_rx,
+            );
 
             let send = state.cl_tx.send(ServerMessage::Ok);
             transition!(FinalizingTxn {
@@ -605,7 +643,7 @@ impl PollClient for Client {
     /// client has received its success notification, we can go back to
     /// waiting for its next command.
     fn poll_finalizing_txn<'a>(
-        state: &'a mut RentToOwn<'a, FinalizingTxn>
+        state: &'a mut RentToOwn<'a, FinalizingTxn>,
     ) -> Poll<AfterFinalizingTxn, Error> {
         let mut state = state.take();
         let ser = try_ready!(state.tx.poll());
@@ -623,16 +661,19 @@ impl PollClient for Client {
     /// because there is an important message that we must send to the client!
     /// The error was in the actions the client asked us to take, but not in
     /// the actual underlying handling of this connection.
-    fn poll_aborting<'a>(
-        state: &'a mut RentToOwn<'a, Aborting>
-    ) -> Poll<AfterAborting, Error> {
+    fn poll_aborting<'a>(state: &'a mut RentToOwn<'a, Aborting>) -> Poll<AfterAborting, Error> {
         try_ready!(state.tx.poll());
-        Err(format_err!("ending connection now that client has been notified"))
+        Err(format_err!(
+            "ending connection now that client has been notified"
+        ))
     }
 }
 
 fn process_open_command(
-    common: ClientCommonState, params: OpenParameters, mut tx: Ser, rx: De
+    common: ClientCommonState,
+    params: OpenParameters,
+    mut tx: Ser,
+    rx: De,
 ) -> Poll<AfterAwaitingCommand, Error> {
     let never_mind = {
         let mut sh = common.shared();
@@ -648,7 +689,11 @@ fn process_open_command(
 
     if never_mind {
         let send = tx.send(ServerMessage::TunnelAlreadyOpen);
-        transition!(FinalizingTxn { common, tx: send, rx });
+        transition!(FinalizingTxn {
+            common,
+            tx: send,
+            rx
+        });
     }
 
     // Generate a magic bit of text that we'll use to recognize when the
@@ -664,8 +709,10 @@ fn process_open_command(
     let (tx_die, rx_die) = mpsc::channel(0);
 
     fn inner(
-        common: &ClientCommonState, params: &OpenParameters,
-        tx_die: mpsc::Sender<Option<ExitStatus>>, key: &str
+        common: &ClientCommonState,
+        params: &OpenParameters,
+        tx_die: mpsc::Sender<Option<ExitStatus>>,
+        key: &str,
     ) -> Result<Framed<AsyncPtyMaster, FailureBytesCodec>, Error> {
         let (tx_kill, rx_kill) = oneshot::channel();
         let ptymaster = AsyncPtyMaster::open().context("failed to create PTY")?;
@@ -678,12 +725,17 @@ fn process_open_command(
             .arg(&params.host)
             .arg(format!("echo \"{}\" && exec tail -f /dev/null", key))
             .env_remove("DISPLAY")
-            .spawn_pty_async(&ptymaster).context("failed to launch SSH")?;
+            .spawn_pty_async(&ptymaster)
+            .context("failed to launch SSH")?;
 
         // The task that will remember this child and wait around for it die.
 
         common.handle.spawn(ChildMonitor::start(
-            common.shared.clone(), params.host.clone(), child, rx_kill, tx_die
+            common.shared.clone(),
+            params.host.clone(),
+            child,
+            rx_kill,
+            tx_die,
         ));
 
         // The kill channel gives us a way to control the process later. We hold
@@ -691,9 +743,10 @@ fn process_open_command(
         // about them when completing the password entry stage of the daemon
         // setup.
 
-        common.shared().children.insert(params.host.clone(), TunnelState::Running {
-            tx_kill: tx_kill,
-        });
+        common.shared().children.insert(
+            params.host.clone(),
+            TunnelState::Running { tx_kill: tx_kill },
+        );
 
         Ok(FailureBytesCodec::new().framed(ptymaster))
     }
@@ -719,7 +772,7 @@ fn process_open_command(
                 ssh_key_status: SshKeyStatus::Searching(0),
                 ssh_die: rx_die.into_future(),
             });
-        },
+        }
 
         Err(e) => {
             let msg = format!("failed to launch SSH: {}", e);
@@ -732,26 +785,37 @@ fn process_open_command(
 // finished the password entry phase.
 
 fn hand_off_ssh_process(
-    handle: &Handle, shared: Arc<Mutex<State>>, _ssh_tx: PtySink, ssh_rx: PtyStream
+    handle: &Handle,
+    shared: Arc<Mutex<State>>,
+    _ssh_tx: PtySink,
+    ssh_rx: PtyStream,
 ) {
     //println!("handing off SSH process to monitor");
     let shared2 = shared.clone();
 
-    let ssh_monitor = ssh_rx.for_each(move |bytes| {
-        log!(shared.lock().unwrap(), "SSH: {:?}", bytes);
-        Ok(())
-    }).map_err(move |err| {
-        log!(shared2.lock().unwrap(), "error polling SSH: {}", err);
-    });
+    let ssh_monitor = ssh_rx
+        .for_each(move |bytes| {
+            log!(shared.lock().unwrap(), "SSH: {:?}", bytes);
+            Ok(())
+        })
+        .map_err(move |err| {
+            log!(shared2.lock().unwrap(), "error polling SSH: {}", err);
+        });
 
     handle.spawn(ssh_monitor);
 }
 
-
 fn process_close_command(
-    common: ClientCommonState, params: CloseParameters, tx: Ser, rx: De
+    common: ClientCommonState,
+    params: CloseParameters,
+    tx: Ser,
+    rx: De,
 ) -> Poll<AfterAwaitingCommand, Error> {
-    log!(common.shared(), "got command to close tunnel SSH for {}", params.host);
+    log!(
+        common.shared(),
+        "got command to close tunnel SSH for {}",
+        params.host
+    );
 
     let tx_kill = match common.shared().children.remove(&params.host) {
         Some(TunnelState::Running { tx_kill }) => Some(tx_kill),
@@ -763,8 +827,12 @@ fn process_close_command(
         None => {
             log!(common.shared(), "no such tunnel -- notifying client");
             let send = tx.send(ServerMessage::TunnelNotOpen);
-            transition!(FinalizingTxn { common, tx: send, rx });
-        },
+            transition!(FinalizingTxn {
+                common,
+                tx: send,
+                rx
+            });
+        }
     };
 
     if let Err(_) = tx_kill.send(()) {
@@ -773,12 +841,17 @@ fn process_close_command(
     }
 
     let send = tx.send(ServerMessage::Ok);
-    transition!(FinalizingTxn { common, tx: send, rx });
+    transition!(FinalizingTxn {
+        common,
+        tx: send,
+        rx
+    });
 }
 
-
 fn process_status_query(
-    common: ClientCommonState, tx: Ser, rx: De
+    common: ClientCommonState,
+    tx: Ser,
+    rx: De,
 ) -> Poll<AfterAwaitingCommand, Error> {
     let mut info = StatusInformation {
         tunnels: Vec::new(),
@@ -798,14 +871,16 @@ fn process_status_query(
     }
 
     let send = tx.send(ServerMessage::StatusResponse(info));
-    transition!(FinalizingTxn { common, tx: send, rx });
+    transition!(FinalizingTxn {
+        common,
+        tx: send,
+        rx
+    });
 }
-
 
 /// This function used to be much more elaborate; it can probably be ditched
 /// now.
-fn abort_client(common: ClientCommonState, tx: Ser, rx: De, message: String) -> Aborting
-{
+fn abort_client(common: ClientCommonState, tx: Ser, rx: De, message: String) -> Aborting {
     Aborting {
         common: common,
         tx: tx.send(ServerMessage::Error(message)),
