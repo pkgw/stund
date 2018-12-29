@@ -148,13 +148,13 @@ impl AsyncPtyMaster {
         let mut buf: [libc::c_char; 512] = [0; 512];
         let fd = self.as_raw_fd();
 
-        #[cfg(not(target_os = "macos"))]
+        #[cfg(not(any(target_os = "macos", target_os = "freebsd")))]
         {
             if unsafe { libc::ptsname_r(fd, buf.as_mut_ptr(), buf.len()) } != 0 {
                 return Err(io::Error::last_os_error());
             }
         }
-        #[cfg(target_os = "macos")]
+        #[cfg(any(target_os = "macos", target_os="freebsd"))]
         unsafe {
             let st = libc::ptsname(fd);
             if st.is_null() {
