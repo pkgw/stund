@@ -122,7 +122,13 @@ impl AsyncPtyMaster {
     /// master handle to nonblocking mode.
     pub fn open() -> Result<Self, io::Error> {
         let inner = unsafe {
+            #[cfg(not(target_os = "freebsd"))]
             let fd = libc::posix_openpt(libc::O_RDWR | libc::O_NOCTTY | libc::O_NONBLOCK);
+
+            // FreeBSD doesn't support O_NONBLOCK on PTYs.
+            #[cfg(target_os = "freebsd")]
+            let fd = libc::posix_openpt(libc::O_RDWR | libc::O_NOCTTY);
+
             if fd < 0 {
                 return Err(io::Error::last_os_error());
             }
@@ -133,6 +139,14 @@ impl AsyncPtyMaster {
 
             if libc::unlockpt(fd) != 0 {
                 return Err(io::Error::last_os_error());
+            }
+
+            #[cfg(target_os = "freebsd")]
+            {
+                let flags = libc::fcntl(fd, libc::F_GETFL, 0);
+                if libc::fcntl(fd, libc::F_SETFL, flags | libc::O_NONBLOCK) == -1 {
+                    return Err(io::Error::last_os_error());
+                };
             }
 
             File::from_raw_fd(fd)
@@ -154,7 +168,7 @@ impl AsyncPtyMaster {
                 return Err(io::Error::last_os_error());
             }
         }
-        #[cfg(any(target_os = "macos", target_os="freebsd"))]
+        #[cfg(any(target_os = "macos", target_os = "freebsd"))]
         unsafe {
             let st = libc::ptsname(fd);
             if st.is_null() {
