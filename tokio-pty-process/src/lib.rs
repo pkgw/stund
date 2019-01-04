@@ -43,11 +43,11 @@ extern crate tokio_signal;
 
 use futures::future::FlattenStream;
 use futures::{Async, Future, Poll, Stream};
-use libc::c_int;
+use libc::{c_int, c_ushort};
 use mio::event::Evented;
 use mio::unix::{EventedFd, UnixReady};
 use mio::{PollOpt, Ready, Token};
-use std::ffi::{CStr, OsStr};
+use std::ffi::{CStr, OsStr, OsString};
 use std::fmt;
 use std::fs::{File, OpenOptions};
 use std::io::{self, Read, Write};
@@ -410,6 +410,122 @@ pub trait AsAsyncPtyFd {
 impl AsAsyncPtyFd for AsyncPtyMaster {
     fn as_async_pty_fd(&self) -> Poll<RawFd, io::Error> {
         Ok(Async::Ready(self.as_raw_fd()))
+    }
+}
+
+/// Trait containing generalized methods for PTYs
+pub trait PtyMaster {
+    /// Return the full pathname of the slave device counterpart
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// extern crate tokio;
+    /// extern crate tokio_pty_process;
+    ///
+    /// use std::ffi::OsString;
+    /// use tokio::prelude::*;
+    /// use tokio_pty_process::{AsyncPtyMaster, PtyMaster};
+    ///
+    /// struct PtsName<T: PtyMaster>(T);
+    ///
+    /// impl<T: PtyMaster> Future for PtsName<T> {
+    ///     type Item = OsString;
+    ///     type Error = std::io::Error;
+    ///
+    ///     fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
+    ///         self.0.ptsname()
+    ///     }
+    /// }
+    ///
+    /// fn main() {
+    ///     let master = AsyncPtyMaster::open().expect("Could not open the PTY");
+    ///
+    ///     let ptsname = PtsName(master).wait().expect("Could not get the ptsname");
+    ///
+    ///     println!("PTS name: {}", ptsname.to_string_lossy());
+    /// }
+    /// ```
+    fn ptsname(&self) -> Poll<OsString, io::Error>;
+
+    /// Resize the PTY
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// extern crate tokio;
+    /// extern crate tokio_pty_process;
+    /// extern crate libc;
+    ///
+    /// use tokio_pty_process::{AsyncPtyMaster, PtyMaster};
+    /// use tokio::prelude::*;
+    /// use std::ffi::OsString;
+    /// use libc::c_ushort;
+    /// struct Resize<T: PtyMaster> {
+    ///     pty: T,
+    ///     rows: c_ushort,
+    ///     cols: c_ushort,
+    /// }
+    ///
+    /// impl<T: PtyMaster> Future for Resize<T> {
+    ///     type Item = ();
+    ///     type Error = std::io::Error;
+    ///
+    ///     fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
+    ///         self.pty.resize(self.rows, self.cols)
+    ///     }
+    /// }
+    ///
+    /// fn main() {
+    ///     let master = AsyncPtyMaster::open().expect("Could not open the PTY");
+    ///
+    ///     Resize {
+    ///         pty: master,
+    ///         cols: 80,
+    ///         rows: 50,
+    ///     }
+    ///     .wait()
+    ///     .expect("Could not resize the PTY");
+    /// }
+    /// ```
+    fn resize(&self, rows: c_ushort, cols: c_ushort) -> Poll<(), io::Error>;
+}
+
+impl<T: AsAsyncPtyFd> PtyMaster for T {
+    fn ptsname(&self) -> Poll<OsString, io::Error> {
+        let mut buf: [libc::c_char; 512] = [0; 512];
+        let fd = try_ready!(self.as_async_pty_fd());
+
+        #[cfg(not(any(target_os = "macos", target_os = "freebsd")))]
+        {
+            if unsafe { libc::ptsname_r(fd, buf.as_mut_ptr(), buf.len()) } != 0 {
+                return Err(io::Error::last_os_error());
+            }
+        }
+        #[cfg(any(target_os = "macos", target_os = "freebsd"))]
+        unsafe {
+            let st = libc::ptsname(fd);
+            if st.is_null() {
+                return Err(io::Error::last_os_error());
+            }
+            libc::strncpy(buf.as_mut_ptr(), st, buf.len());
+        }
+        let ptsname = OsStr::from_bytes(unsafe { CStr::from_ptr(&buf as _) }.to_bytes());
+        Ok(Async::Ready(ptsname.to_os_string()))
+    }
+
+    fn resize(&self, rows: c_ushort, cols: c_ushort) -> Poll<(), io::Error> {
+        let fd = try_ready!(self.as_async_pty_fd());
+        let winsz = libc::winsize {
+            ws_row: rows,
+            ws_col: cols,
+            ws_xpixel: 0,
+            ws_ypixel: 0,
+        };
+        if unsafe { libc::ioctl(fd, libc::TIOCSWINSZ.into(), &winsz) } != 0 {
+            return Err(io::Error::last_os_error());
+        }
+        Ok(Async::Ready(()))
     }
 }
 
