@@ -15,8 +15,10 @@ categories = ["asynchronous", "os::unix-apis"]
 license = "MIT/Apache-2.0"
 
 [dependencies]
+bytes = "0.4.11"
 futures = "0.1"
 libc = "0.2"
 mio = "0.6"
 tokio = "0.1.7"
+tokio-io = "0.1.10"
 tokio-signal = "0.2.1"

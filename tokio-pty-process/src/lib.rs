@@ -32,10 +32,13 @@
 //! The `Child` type is largely copied from Alex Crichton’s
 //! [tokio-process](https://github.com/alexcrichton/tokio-process) crate.
 
+extern crate bytes;
+#[macro_use]
 extern crate futures;
 extern crate libc;
 extern crate mio;
 extern crate tokio;
+extern crate tokio_io;
 extern crate tokio_signal;
 
 use futures::future::FlattenStream;
@@ -56,6 +59,9 @@ use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::reactor::PollEvented2;
 use tokio_signal::unix::Signal;
 use tokio_signal::IoFuture;
+
+mod split;
+pub use split::{AsyncPtyMasterReadHalf, AsyncPtyMasterWriteHalf};
 
 // First set of hoops to jump through: a read-write pseudo-terminal master
 // with full async support. As far as I can tell, we need to create an inner
@@ -144,6 +150,13 @@ impl AsyncPtyMaster {
         };
 
         Ok(AsyncPtyMaster(PollEvented2::new(AsyncPtyFile::new(inner))))
+    }
+
+    /// Split the AsyncPtyMaster into an AsyncPtyReadHalf implementing `Read` and
+    /// and `AsyncRead` as well as an `AsyncPtyWriteHalf` implementing
+    /// `AsyncPtyWrite`.
+    pub fn split(self) -> (AsyncPtyMasterReadHalf, AsyncPtyMasterWriteHalf) {
+        split::split(self)
     }
 
     /// Open a pseudo-TTY slave that is connected to this master.
@@ -322,6 +335,55 @@ impl Drop for Child {
         if self.kill_on_drop {
             drop(self.kill());
         }
+    }
+}
+
+/// A Future for getting the Pty file descriptor.
+///
+/// # Example
+///
+/// ```
+/// extern crate tokio;
+/// extern crate tokio_pty_process;
+///
+/// use tokio_pty_process::{AsyncPtyMaster, AsyncPtyFd};
+/// use tokio::prelude::*;
+///
+/// fn main() {
+///     let master = AsyncPtyMaster::open()
+///         .expect("Could not open the PTY");
+///
+///     let fd = AsyncPtyFd::from(master).wait()
+///         .expect("Could not get the File descriptor");
+/// }
+/// ```
+pub struct AsyncPtyFd<T: AsAsyncPtyFd>(T);
+
+impl<T: AsAsyncPtyFd> AsyncPtyFd<T> {
+    /// Construct a new AsyncPtyFd future
+    pub fn from(inner: T) -> Self {
+        AsyncPtyFd(inner)
+    }
+}
+
+impl<T: AsAsyncPtyFd> Future for AsyncPtyFd<T> {
+    type Item = RawFd;
+    type Error = io::Error;
+
+    fn poll(&mut self) -> Poll<RawFd, io::Error> {
+        self.0.as_async_pty_fd()
+    }
+}
+
+/// Trait to asynchronously get the `RawFd` of the master side of the PTY
+pub trait AsAsyncPtyFd {
+    /// Return a `Poll` containing the RawFd
+    fn as_async_pty_fd(&self) -> Poll<RawFd, io::Error>;
+}
+
+impl AsAsyncPtyFd for AsyncPtyMaster {
+    fn as_async_pty_fd(&self) -> Poll<RawFd, io::Error> {
+        Ok(Async::Ready(self.as_raw_fd()))
     }
 }
 
