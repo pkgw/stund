@@ -31,4 +31,4 @@ script:
   - |
     cargo fmt --all -- --check &&
     cargo build --verbose &&
-    cargo test
+    cargo test --all
