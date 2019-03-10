@@ -204,12 +204,20 @@ enum TunnelState {
 #[derive(StateMachineFuture)]
 #[allow(unused)] // get lots of these spuriously; custom derive stuff?
 enum ChildMonitor {
-    #[state_machine_future(start, transitions(NotifyingChildDied))]
+    #[state_machine_future(start, transitions(AwaitingChildReaped, NotifyingChildDied))]
     AwaitingChildEvent {
         shared: Arc<Mutex<State>>,
         key: String,
         child: Child,
         rx_kill: oneshot::Receiver<()>,
+        tx_die: mpsc::Sender<Option<ExitStatus>>, // None if child was explicitly killed
+    },
+
+    #[state_machine_future(transitions(NotifyingChildDied))]
+    AwaitingChildReaped {
+        shared: Arc<Mutex<State>>,
+        key: String,
+        child: Child,
         tx_die: mpsc::Sender<Option<ExitStatus>>, // None if child was explicitly killed
     },
 
@@ -274,13 +282,54 @@ impl PollChildMonitor for ChildMonitor {
                 {
                     let mut sh = state.shared.lock().unwrap();
                     log!(sh, "ordered to kill SSH child for {}", state.key);
-                    sh.children
-                        .insert(state.key, TunnelState::Exited { status: None });
                 }
                 let _r = state.child.kill(); // can't do anything if this fails
                 state.rx_kill.close();
+                // wait for child process die completely,
+                // if not await, child process will become a defunct process
+                // which would cause process id leak
+                transition!(AwaitingChildReaped {
+                    shared: state.shared,
+                    key: state.key,
+                    child: state.child,
+                    tx_die: state.tx_die,
+                });
+            }
+
+            Ok(Async::NotReady) => {}
+        }
+
+        Ok(Async::NotReady)
+    }
+
+    fn poll_awaiting_child_reaped<'a>(
+        state: &'a mut RentToOwn<'a, AwaitingChildReaped>,
+    ) -> Poll<AfterAwaitingChildReaped, ()> {
+        match state.child.poll() {
+            Err(_) => {
+                return Err(());
+            }
+
+            Ok(Async::Ready(_status)) => {
+                // Child died from kill signal!
+                // we should let other tasks know what happened.
+
+                // To be compatible old code, manually killed
+                // process signal sent to tx_die is None
+                let exit_status = None;
+                let mut state = state.take();
+                {
+                    let mut sh = state.shared.lock().unwrap();
+                    log!(sh, "SSH child is reaped by SIGKILL for {}", state.key);
+                    sh.children.insert(
+                        state.key,
+                        TunnelState::Exited {
+                            status: exit_status,
+                        },
+                    );
+                }
                 transition!(NotifyingChildDied {
-                    tx_die: state.tx_die.send(None),
+                    tx_die: state.tx_die.send(exit_status),
                 });
             }
 
