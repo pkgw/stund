@@ -209,7 +209,7 @@ dependencies = [
 
 [[package]]
 name = "daemonize"
-version = "0.4.0"
+version = "0.4.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 dependencies = [
  "boxfnonce 0.1.1 (registry+https://github.com/rust-lang/crates.io-index)",
@@ -813,7 +813,7 @@ version = "0.1.4"
 dependencies = [
  "atty 0.2.11 (registry+https://github.com/rust-lang/crates.io-index)",
  "base64 0.10.1 (registry+https://github.com/rust-lang/crates.io-index)",
- "daemonize 0.4.0 (registry+https://github.com/rust-lang/crates.io-index)",
+ "daemonize 0.4.1 (registry+https://github.com/rust-lang/crates.io-index)",
  "failure 0.1.5 (registry+https://github.com/rust-lang/crates.io-index)",
  "futures 0.1.25 (registry+https://github.com/rust-lang/crates.io-index)",
  "libc 0.2.50 (registry+https://github.com/rust-lang/crates.io-index)",
@@ -1261,7 +1261,7 @@ dependencies = [
 "checksum crossbeam-deque 0.6.3 (registry+https://github.com/rust-lang/crates.io-index)" = "05e44b8cf3e1a625844d1750e1f7820da46044ff6d28f4d43e455ba3e5bb2c13"
 "checksum crossbeam-epoch 0.7.1 (registry+https://github.com/rust-lang/crates.io-index)" = "04c9e3102cc2d69cd681412141b390abd55a362afc1540965dad0ad4d34280b4"
 "checksum crossbeam-utils 0.6.5 (registry+https://github.com/rust-lang/crates.io-index)" = "f8306fcef4a7b563b76b7dd949ca48f52bc1141aa067d2ea09565f3e2652aa5c"
-"checksum daemonize 0.4.0 (registry+https://github.com/rust-lang/crates.io-index)" = "c33ff2b9cc5a053a724b286170264743607b419b285c9b038925b5f1f30394ca"
+"checksum daemonize 0.4.1 (registry+https://github.com/rust-lang/crates.io-index)" = "70c24513e34f53b640819f0ac9f705b673fcf4006d7aab8778bee72ebfc89815"
 "checksum darling 0.8.3 (registry+https://github.com/rust-lang/crates.io-index)" = "540f3246eaeecb3fc7ff9ac258f8958a57d3d87a637466fd5ad077663eabae80"
 "checksum darling_core 0.8.3 (registry+https://github.com/rust-lang/crates.io-index)" = "69e5f4498f3c21a65d0477542d691dac79b0f44048f5174901fdbf1b676b94b7"
 "checksum darling_macro 0.8.3 (registry+https://github.com/rust-lang/crates.io-index)" = "b8c04b3c08354a7d8a70d633931852de9e11b664881d8dd4d686e6bc7761e7fd"
