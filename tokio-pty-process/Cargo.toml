@@ -1,4 +1,4 @@
-# Copyright 2018 Peter Williams <peter@newton.cx>
+# Copyright 2019 Peter Williams <peter@newton.cx>
 # Licensed under the MIT License.
 
 [package]
@@ -22,3 +22,6 @@ mio = "0.6"
 tokio = "0.1.7"
 tokio-io = "0.1.10"
 tokio-signal = "0.2.1"
+
+[dev-dependencies]
+errno = "0.2"

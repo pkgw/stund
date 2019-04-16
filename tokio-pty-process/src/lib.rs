@@ -497,3 +497,36 @@ impl CommandExt for process::Command {
         self.spawn_pty_async_full(ptymaster, true)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    extern crate errno;
+    extern crate libc;
+
+    use super::*;
+
+    /// Test that the PTY master file descriptor is in nonblocking mode. We do
+    /// this in a pretty hacky and dumb way, by creating the AsyncPtyMaster
+    /// and then just snarfing its FD and seeing whether a Unix `read(2)` call
+    /// errors out with EWOULDBLOCK (instead of blocking forever). In
+    /// principle it would be nice to actually spawn a subprogram and test
+    /// reading through the whole Tokio I/O subsystem, but that's annoying to
+    /// implement and can actually muddy the picture. Namely: if you try to
+    /// `master.read()` inside a Tokio event loop here, on Linux you'll get an
+    /// ErrorKind::WouldBlock I/O error from Tokio without it even attempting
+    /// the underlying `read(2)` system call, because Tokio uses epoll to test
+    /// the FD's readiness in a way that works orthogonal to whether it's set
+    /// to non-blocking mode.
+    #[test]
+    fn basic_nonblocking() {
+        let master = AsyncPtyMaster::open().unwrap();
+
+        let fd = master.as_raw_fd();
+        let mut buf = [0u8; 128];
+        let rval = unsafe { libc::read(fd, buf.as_mut_ptr() as *mut libc::c_void, 128) };
+        let errno: i32 = errno::errno().into();
+
+        assert_eq!(rval, -1);
+        assert_eq!(errno, libc::EWOULDBLOCK as i32);
+    }
+}
