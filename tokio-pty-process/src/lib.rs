@@ -133,12 +133,21 @@ impl AsyncPtyMaster {
     /// master handle to nonblocking mode.
     pub fn open() -> Result<Self, io::Error> {
         let inner = unsafe {
-            #[cfg(not(target_os = "freebsd"))]
-            let fd = libc::posix_openpt(libc::O_RDWR | libc::O_NOCTTY | libc::O_NONBLOCK);
+            // On MacOS, O_NONBLOCK is not documented as an allowed option to
+            // posix_openpt(), but it is in fact allowed and functional, and
+            // trying to add it later with fcntl() is forbidden. Meanwhile, on
+            // FreeBSD, O_NONBLOCK is *not* an allowed option to
+            // posix_openpt(), and the only way to get a nonblocking PTY
+            // master is to add the nonblocking flag with fcntl() later. So,
+            // we have to jump through some #[cfg()] hoops.
 
-            // FreeBSD doesn't support O_NONBLOCK on PTYs.
-            #[cfg(target_os = "freebsd")]
-            let fd = libc::posix_openpt(libc::O_RDWR | libc::O_NOCTTY);
+            const APPLY_NONBLOCK_AFTER_OPEN: bool = cfg!(target_os = "freebsd");
+
+            let fd = if APPLY_NONBLOCK_AFTER_OPEN {
+                libc::posix_openpt(libc::O_RDWR | libc::O_NOCTTY)
+            } else {
+                libc::posix_openpt(libc::O_RDWR | libc::O_NOCTTY | libc::O_NONBLOCK)
+            };
 
             if fd < 0 {
                 return Err(io::Error::last_os_error());
@@ -152,12 +161,15 @@ impl AsyncPtyMaster {
                 return Err(io::Error::last_os_error());
             }
 
-            #[cfg(target_os = "freebsd")]
-            {
+            if APPLY_NONBLOCK_AFTER_OPEN {
                 let flags = libc::fcntl(fd, libc::F_GETFL, 0);
+                if flags < 0 {
+                    return Err(io::Error::last_os_error());
+                }
+
                 if libc::fcntl(fd, libc::F_SETFL, flags | libc::O_NONBLOCK) == -1 {
                     return Err(io::Error::last_os_error());
-                };
+                }
             }
 
             File::from_raw_fd(fd)
