@@ -601,12 +601,6 @@ impl PollClient for Client {
                         // We need to search SSH's output for the "key" that
                         // we use to figure out that login has completed
                         // successfully.
-                        //
-                        // If we were cleverer we would not show the "key"
-                        // text to the client, but I don't want to figure out
-                        // the right state machine magic to ensure that output
-                        // is eventually showed in the event of an incomplete
-                        // match.
                         if let SshKeyStatus::Searching(next_idx) = state.ssh_key_status {
                             let mut n = next_idx;
 
@@ -640,13 +634,22 @@ impl PollClient for Client {
             }
         }
 
-        // Ready/able to send bytes to the client?
+        // Ready/able to send bytes to the client? We only do so if we have
+        // not already found the magic key, because if we *have* found the
+        // key, we're going to want to send the client the `Ok` message later
+        // in this function, and empirically attempting both sends in one
+        // iteration breaks the transmission of the `Ok`. Also, in the common
+        // case that we get the key in one chunk, this means that we don't
+        // print the "STUND:zzzz" text to the client, which is nice from the
+        // user perspective.
 
         if state.cl_buf.len() != 0 {
             let buf = state.cl_buf.clone();
 
-            if let AsyncSink::Ready = state.cl_tx.start_send(ServerMessage::SshData(buf))? {
-                state.cl_buf.clear();
+            if let SshKeyStatus::Searching(_) = state.ssh_key_status {
+                if let AsyncSink::Ready = state.cl_tx.start_send(ServerMessage::SshData(buf))? {
+                    state.cl_buf.clear();
+                }
             }
         }
 
