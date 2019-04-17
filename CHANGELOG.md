@@ -1,3 +1,16 @@
+# tokio-pty-process 0.3.2 (2019 Apr 17)
+
+- *Actually* get this working on FreeBSD. We need to set the flags on the PTY
+  master after opening it. Thanks to `@fabianfreyer` for
+  [the patch](https://github.com/pkgw/stund/pull/48).
+- Added FreeBSD CI and a test case that should hopefully help with getting
+  these things right in the future (`@pkgw`,
+  [#70](https://github.com/pkgw/stund/pull/70)).
+- Add a feature that makes it possible to “split” an `AsyncPtyMaster` into halves,
+  analogous to what can be done with generic Tokio read/write streams. We implement
+  the functionality ourselves so that we can additionally make it possible to
+  implement `AsRawFd` for the split halves. Thanks to `@fabianfreyer`.
+
 # stund 0.1.4 (2018 Dec 29)
 
 - Update dependencies, including using `tokio-pty-process` 0.3.1. This should

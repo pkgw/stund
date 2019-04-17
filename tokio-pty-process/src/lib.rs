@@ -1,8 +1,8 @@
-// Copyright 2018 Peter Williams <peter@newton.cx>
+// Copyright 2018-2019 Peter Williams <peter@newton.cx>
 // Licensed under both the MIT License and the Apache-2.0 license.
 
 #![deny(missing_docs)]
-#![doc(html_root_url = "https://docs.rs/tokio-pty-process/0.3.1")]
+#![doc(html_root_url = "https://docs.rs/tokio-pty-process/0.3.2")]
 
 //! Spawn a child process under a pseudo-TTY, interacting with it
 //! asynchronously using Tokio.
