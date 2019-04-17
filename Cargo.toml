@@ -3,7 +3,7 @@
 
 [package]
 name = "stund"
-version = "0.1.4"
+version = "0.1.5"
 authors = ["Peter Williams <peter@newton.cx>"]
 description = "An SSH tunnel maintenance daemon."
 homepage = "https://github.com/pkgw/stund/"
