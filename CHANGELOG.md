@@ -1,4 +1,4 @@
-# stund 0.1.5 (2010 Apr 17)
+# stund 0.1.5 (2019 Apr 17)
 
 - Update dependencies, including using `tokio-pty-process` 0.3.2. This should
   get us working on FreeBSD for real this time!
