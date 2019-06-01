@@ -499,6 +499,49 @@ pub trait PtyMaster {
     /// }
     /// ```
     fn resize(&self, rows: c_ushort, cols: c_ushort) -> Poll<(), io::Error>;
+
+    /// Get the PTY size
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// extern crate tokio;
+    /// extern crate tokio_pty_process;
+    /// extern crate libc;
+    ///
+    /// use tokio_pty_process::{AsyncPtyMaster, PtyMaster, CommandExt};
+    /// use tokio::prelude::*;
+    /// use std::ffi::OsString;
+    /// use libc::c_ushort;
+    ///
+    /// struct GetSize<'a, T: PtyMaster> (&'a T);
+    /// impl<'a, T: PtyMaster> Future for GetSize<'a, T> {
+    ///     type Item = (c_ushort, c_ushort);
+    ///     type Error = std::io::Error;
+    ///     fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
+    ///         self.0.winsize()
+    ///     }
+    /// }
+    ///
+    /// fn main() {
+    ///     let master = AsyncPtyMaster::open().expect("Could not open the PTY");
+    ///
+    ///     // On macos, it's only possible to resize a PTY with a child spawned
+    ///     // On it, so let's just do that:
+    ///     #[cfg(target_os="macos")]
+    ///     let mut child = std::process::Command::new("cat")
+    ///         .spawn_pty_async(&master)
+    ///         .expect("Could not spawn child");
+    ///
+    ///     let (rows, cols) = GetSize(&master)
+    ///         .wait()
+    ///         .expect("Could not get PTY size");
+    ///
+    ///     #[cfg(target_os="macos")]
+    ///     child.kill().expect("Could not kill child");
+    /// }
+    /// ```
+    fn winsize(&self) -> Poll<(c_ushort, c_ushort), io::Error>;
 }
 
 impl<T: AsAsyncPtyFd> PtyMaster for T {
@@ -522,6 +565,15 @@ impl<T: AsAsyncPtyFd> PtyMaster for T {
         }
         let ptsname = OsStr::from_bytes(unsafe { CStr::from_ptr(&buf as _) }.to_bytes());
         Ok(Async::Ready(ptsname.to_os_string()))
+    }
+
+    fn winsize(&self) -> Poll<(c_ushort, c_ushort), io::Error> {
+        let fd = try_ready!(self.as_async_pty_fd());
+        let mut winsz: libc::winsize = unsafe { std::mem::zeroed() };
+        if unsafe { libc::ioctl(fd, libc::TIOCGWINSZ.into(), &mut winsz) } != 0 {
+            return Err(io::Error::last_os_error());
+        }
+        Ok(Async::Ready((winsz.ws_row, winsz.ws_col)))
     }
 
     fn resize(&self, rows: c_ushort, cols: c_ushort) -> Poll<(), io::Error> {
@@ -666,5 +718,55 @@ mod tests {
 
         assert_eq!(rval, -1);
         assert_eq!(errno, libc::EWOULDBLOCK as i32);
+    }
+
+    struct GetSize<'a, T: PtyMaster>(&'a T);
+    impl<'a, T: PtyMaster> Future for GetSize<'a, T> {
+        type Item = (c_ushort, c_ushort);
+        type Error = std::io::Error;
+        fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
+            self.0.winsize()
+        }
+    }
+
+    struct Resize<'a, T: PtyMaster> {
+        pty: &'a T,
+        rows: c_ushort,
+        cols: c_ushort,
+    }
+    impl<'a, T: PtyMaster> Future for Resize<'a, T> {
+        type Item = ();
+        type Error = std::io::Error;
+        fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
+            self.pty.resize(self.rows, self.cols)
+        }
+    }
+
+    #[test]
+    fn test_winsize() {
+        let master = AsyncPtyMaster::open().expect("Could not open the PTY");
+
+        // On macos, it's only possible to resize a PTY with a child spawned
+        // On it, so let's just do that:
+        #[cfg(target_os = "macos")]
+        let mut child = std::process::Command::new("cat")
+            .spawn_pty_async(&master)
+            .expect("Could not spawn child");
+
+        // Set the size
+        Resize {
+            pty: &master,
+            cols: 80,
+            rows: 50,
+        }.wait()
+            .expect("Could not resize the PTY");
+
+        let (rows, cols) = GetSize(&master).wait().expect("Could not get PTY size");
+
+        assert_eq!(cols, 80);
+        assert_eq!(rows, 50);
+
+        #[cfg(target_os = "macos")]
+        child.kill().expect("Could not kill child");
     }
 }
