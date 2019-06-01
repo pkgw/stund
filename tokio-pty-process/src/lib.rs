@@ -457,7 +457,7 @@ pub trait PtyMaster {
     /// extern crate tokio_pty_process;
     /// extern crate libc;
     ///
-    /// use tokio_pty_process::{AsyncPtyMaster, PtyMaster};
+    /// use tokio_pty_process::{AsyncPtyMaster, PtyMaster, CommandExt};
     /// use tokio::prelude::*;
     /// use std::ffi::OsString;
     /// use libc::c_ushort;
@@ -479,6 +479,13 @@ pub trait PtyMaster {
     /// fn main() {
     ///     let master = AsyncPtyMaster::open().expect("Could not open the PTY");
     ///
+    ///     // On macos, it's only possible to resize a PTY with a child spawned
+    ///     // On it, so let's just do that:
+    ///     #[cfg(target_os="macos")]
+    ///     let mut child = std::process::Command::new("cat")
+    ///         .spawn_pty_async(&master)
+    ///         .expect("Could not spawn child");
+    ///
     ///     Resize {
     ///         pty: master,
     ///         cols: 80,
@@ -486,6 +493,9 @@ pub trait PtyMaster {
     ///     }
     ///     .wait()
     ///     .expect("Could not resize the PTY");
+    ///
+    ///     #[cfg(target_os="macos")]
+    ///     child.kill().expect("Could not kill child");
     /// }
     /// ```
     fn resize(&self, rows: c_ushort, cols: c_ushort) -> Poll<(), io::Error>;
