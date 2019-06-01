@@ -758,8 +758,9 @@ mod tests {
             pty: &master,
             cols: 80,
             rows: 50,
-        }.wait()
-            .expect("Could not resize the PTY");
+        }
+        .wait()
+        .expect("Could not resize the PTY");
 
         let (rows, cols) = GetSize(&master).wait().expect("Could not get PTY size");
 
