@@ -496,20 +496,24 @@ impl<T: AsAsyncPtyFd> PtyMaster for T {
         let mut buf: [libc::c_char; 512] = [0; 512];
         let fd = try_ready!(self.as_async_pty_fd());
 
-        #[cfg(not(any(target_os = "macos", target_os = "freebsd")))]
-        {
+        // Use the threadsafe ptsname_r(3) function where available.
+        const USE_THREADSAFE_PTSNAME: bool =
+            cfg!(not(any(target_os = "macos", target_os = "freebsd")));
+
+        if USE_THREADSAFE_PTSNAME {
             if unsafe { libc::ptsname_r(fd, buf.as_mut_ptr(), buf.len()) } != 0 {
                 return Err(io::Error::last_os_error());
             }
-        }
-        #[cfg(any(target_os = "macos", target_os = "freebsd"))]
-        unsafe {
-            let st = libc::ptsname(fd);
-            if st.is_null() {
-                return Err(io::Error::last_os_error());
+        } else {
+            unsafe {
+                let st = libc::ptsname(fd);
+                if st.is_null() {
+                    return Err(io::Error::last_os_error());
+                }
+                libc::strncpy(buf.as_mut_ptr(), st, buf.len());
             }
-            libc::strncpy(buf.as_mut_ptr(), st, buf.len());
         }
+
         let ptsname = OsStr::from_bytes(unsafe { CStr::from_ptr(&buf as _) }.to_bytes());
         Ok(Async::Ready(ptsname.to_os_string()))
     }
