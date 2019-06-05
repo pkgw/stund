@@ -24,7 +24,7 @@ matrix:
   allow_failures:
     - rust: nightly
 
-# Don't branches besides master -- note that PR's still get built! This
+# Don't build branches besides master -- note that PR's still get built! This
 # prevents PRs being built twice in the standard workflow.
 branches:
   only:
