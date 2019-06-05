@@ -1,3 +1,15 @@
+# stund 0.1.6 (2019 Jun 4)
+
+- Update dependencies, including using `tokio-pty-process` 0.4.0. This doesn't
+  add any new features as far as `stund` is concerned, but gets us using the
+  new version of that crate that provides the `PtyMaster` trait.
+
+# tokio-pty-process 0.4.0 (2019 Jun 4)
+
+- Add and implement the `PtyMaster` trait, allowing basic controls of PTY
+  characteristics. (`@fabianfreyer`,
+  [#50](https://github.com/pkgw/stund/pull/50)).
+
 # stund 0.1.5 (2019 Apr 17)
 
 - Update dependencies, including using `tokio-pty-process` 0.3.2. This should

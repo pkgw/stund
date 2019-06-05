@@ -3,7 +3,7 @@
 
 [package]
 name = "stund"
-version = "0.1.5"
+version = "0.1.6"
 authors = ["Peter Williams <peter@newton.cx>"]
 description = "An SSH tunnel maintenance daemon."
 homepage = "https://github.com/pkgw/stund/"
@@ -31,7 +31,7 @@ tokio-borrow-stdio = { path = "tokio-borrow-stdio", version = "0.1.0" }
 tokio-codec = "0.1"
 tokio-core = "0.1"
 tokio-io = "0.1"
-tokio-pty-process = { path = "tokio-pty-process", version = "0.3.2" }
+tokio-pty-process = { path = "tokio-pty-process", version = "0.4.0" }
 tokio-serde-bincode = "0.2"
 tokio-signal = "0.1"
 tokio-uds = "0.1"
