@@ -5,14 +5,14 @@
 
 use base64;
 use daemonize;
-use failure::{Error, ResultExt};
+use failure::{format_err, Error, ResultExt};
 use futures::sink::Send;
 use futures::stream::{SplitSink, SplitStream, StreamFuture};
 use futures::sync::{mpsc, oneshot};
-use futures::{Async, AsyncSink, Future, Poll, Sink, Stream};
+use futures::{try_ready, Async, AsyncSink, Future, Poll, Sink, Stream};
 use libc;
 use rand::{self, RngCore};
-use state_machine_future::RentToOwn;
+use state_machine_future::{transition, RentToOwn, StateMachineFuture};
 use std::collections::HashMap;
 use std::fmt;
 use std::fs;
@@ -317,7 +317,7 @@ impl PollChildMonitor for ChildMonitor {
                 // To be compatible old code, manually killed
                 // process signal sent to tx_die is None
                 let exit_status = None;
-                let mut state = state.take();
+                let state = state.take();
                 {
                     let mut sh = state.shared.lock().unwrap();
                     log!(sh, "SSH child is reaped by SIGKILL for {}", state.key);
@@ -588,7 +588,7 @@ impl PollClient for Client {
                         "something went wrong communicating with the SSH process: {}",
                         e
                     );
-                    let mut state = state.take();
+                    let state = state.take();
                     transition!(abort_client(state.common, state.cl_tx, state.cl_rx, msg));
                 }
             };
@@ -627,7 +627,7 @@ impl PollClient for Client {
                     } else {
                         // EOF from SSH -- it has probably died.
                         let msg = format!("unexpected EOF from SSH (program died?)");
-                        let mut state = state.take();
+                        let state = state.take();
                         transition!(abort_client(state.common, state.cl_tx, state.cl_rx, msg));
                     }
                 }

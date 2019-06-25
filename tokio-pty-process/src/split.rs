@@ -10,13 +10,12 @@
 
 use bytes::{Buf, BufMut};
 use futures::sync::BiLock;
-use futures::{Async, Poll};
+use futures::{try_ready, Async, Poll};
 use std::io::{self, Read, Write};
 use std::os::unix::io::{AsRawFd, RawFd};
 use tokio_io::{AsyncRead, AsyncWrite};
 
-use crate::AsyncPtyMaster;
-use AsAsyncPtyFd;
+use crate::{AsAsyncPtyFd, AsyncPtyMaster};
 
 pub fn split(master: AsyncPtyMaster) -> (AsyncPtyMasterReadHalf, AsyncPtyMasterWriteHalf) {
     let (a, b) = BiLock::new(master);

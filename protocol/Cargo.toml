@@ -13,6 +13,7 @@ readme = "README.md"
 keywords = ["stund"]
 categories = ["asynchronous"]
 license = "MIT"
+edition = "2018"
 
 [dependencies]
 bytes = "0.4"
@@ -20,9 +21,8 @@ dirs = "2.0"
 failure = "0.1"
 futures = "0.1"
 libc = "0.2"
-serde = "1.0"
-serde_derive = "1.0"
-state_machine_future = "0.1"
+serde = { version = "1.0", features = ["derive"] }
+state_machine_future = "0.2"
 tokio-codec = "0.1"
 tokio-core = "0.1"
 tokio-io = "0.1"

@@ -11,10 +11,6 @@
 //! with the calling thread through [futures
 //! channels](https://docs.rs/futures/*/futures/channel/index.html).
 
-extern crate futures;
-extern crate tokio_core;
-extern crate tokio_io;
-
 use futures::future::{Either, Loop};
 use futures::sink::Send;
 use futures::sync::{mpsc, oneshot};

@@ -32,17 +32,8 @@
 //! The `Child` type is largely copied from Alex Crichton’s
 //! [tokio-process](https://github.com/alexcrichton/tokio-process) crate.
 
-extern crate bytes;
-#[macro_use]
-extern crate futures;
-extern crate libc;
-extern crate mio;
-extern crate tokio;
-extern crate tokio_io;
-extern crate tokio_signal;
-
 use futures::future::FlattenStream;
-use futures::{Async, Future, Poll, Stream};
+use futures::{try_ready, Async, Future, Poll, Stream};
 use libc::{c_int, c_ushort};
 use mio::event::Evented;
 use mio::unix::{EventedFd, UnixReady};
