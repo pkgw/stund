@@ -334,7 +334,7 @@ impl PollOpenWorkflow for OpenWorkflow {
 
                 Some(ServerMessage::Ok) => {
                     // All done!
-                    let mut state = state.take();
+                    let state = state.take();
                     transition!(Finished((state.tx_ssh, state.rx_ssh, OpenResult::Success)));
                 }
 

@@ -13,6 +13,7 @@ readme = "README.md"
 keywords = ["tokio", "stdio"]
 categories = ["asynchronous", "os::unix-apis"]
 license = "MIT"
+edition = "2018"
 
 [dependencies]
 futures = "0.1"

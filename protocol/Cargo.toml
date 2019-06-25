@@ -13,6 +13,7 @@ readme = "README.md"
 keywords = ["stund"]
 categories = ["asynchronous"]
 license = "MIT"
+edition = "2018"
 
 [dependencies]
 bytes = "0.4"

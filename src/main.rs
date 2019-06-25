@@ -134,7 +134,7 @@ impl StundOpenOptions {
         let r = if self.no_input {
             // Big hack: we just ignore any output that we ought to print.
             use futures::Sink;
-            let mut buf = Vec::new();
+            let buf = Vec::new();
             conn.send_open(
                 params,
                 buf.sink_map_err(|_| io::ErrorKind::Other.into()),
