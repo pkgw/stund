@@ -9,9 +9,9 @@
 
 use failure::{Error, ResultExt};
 use futures::sink::Send;
-use futures::{Async, AsyncSink, Future, Poll, Sink, Stream};
+use futures::{try_ready, Async, AsyncSink, Future, Poll, Sink, Stream};
 use libc;
-use state_machine_future::RentToOwn;
+use state_machine_future::{transition, RentToOwn, StateMachineFuture};
 use std::env;
 use std::io;
 use std::mem;

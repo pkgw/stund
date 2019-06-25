@@ -3,10 +3,6 @@
 
 //! The dumbest example.
 
-extern crate futures;
-extern crate tokio_borrow_stdio;
-extern crate tokio_core;
-
 use futures::stream::Stream;
 use futures::Future;
 use std::str;

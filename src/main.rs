@@ -3,28 +3,6 @@
 
 //! The main CLI driver logic.
 
-extern crate atty;
-extern crate base64;
-extern crate daemonize;
-#[macro_use]
-extern crate failure;
-#[macro_use]
-extern crate futures;
-extern crate libc;
-extern crate rand;
-#[macro_use]
-extern crate state_machine_future;
-extern crate structopt;
-extern crate stund_protocol;
-extern crate tokio_borrow_stdio;
-extern crate tokio_codec;
-extern crate tokio_core;
-extern crate tokio_io;
-extern crate tokio_pty_process;
-extern crate tokio_serde_bincode;
-extern crate tokio_signal;
-extern crate tokio_uds;
-
 use failure::{Error, Fail};
 use std::io;
 use std::mem;

@@ -15,8 +15,6 @@ use tokio_io::AsyncRead;
 use tokio_serde_bincode::{ReadBincode, WriteBincode};
 use tokio_uds::UnixStream;
 
-use super::*;
-
 /// A shim type for Tokio codecs.
 ///
 /// This type is just like `tokio_codec::BytesCodec`, but its error type is

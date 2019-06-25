@@ -5,14 +5,14 @@
 
 use base64;
 use daemonize;
-use failure::{Error, ResultExt};
+use failure::{format_err, Error, ResultExt};
 use futures::sink::Send;
 use futures::stream::{SplitSink, SplitStream, StreamFuture};
 use futures::sync::{mpsc, oneshot};
-use futures::{Async, AsyncSink, Future, Poll, Sink, Stream};
+use futures::{try_ready, Async, AsyncSink, Future, Poll, Sink, Stream};
 use libc;
 use rand::{self, RngCore};
-use state_machine_future::RentToOwn;
+use state_machine_future::{transition, RentToOwn, StateMachineFuture};
 use std::collections::HashMap;
 use std::fmt;
 use std::fs;
