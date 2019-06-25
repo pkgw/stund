@@ -235,19 +235,6 @@ dependencies = [
 
 [[package]]
 name = "derive_state_machine_future"
-version = "0.1.8"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-dependencies = [
- "darling 0.8.6 (registry+https://github.com/rust-lang/crates.io-index)",
- "heck 0.3.1 (registry+https://github.com/rust-lang/crates.io-index)",
- "petgraph 0.4.13 (registry+https://github.com/rust-lang/crates.io-index)",
- "proc-macro2 0.4.30 (registry+https://github.com/rust-lang/crates.io-index)",
- "quote 0.6.12 (registry+https://github.com/rust-lang/crates.io-index)",
- "syn 0.15.38 (registry+https://github.com/rust-lang/crates.io-index)",
-]
-
-[[package]]
-name = "derive_state_machine_future"
 version = "0.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 dependencies = [
@@ -780,16 +767,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 
 [[package]]
 name = "state_machine_future"
-version = "0.1.8"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-dependencies = [
- "derive_state_machine_future 0.1.8 (registry+https://github.com/rust-lang/crates.io-index)",
- "futures 0.1.27 (registry+https://github.com/rust-lang/crates.io-index)",
- "rent_to_own 0.1.0 (registry+https://github.com/rust-lang/crates.io-index)",
-]
-
-[[package]]
-name = "state_machine_future"
 version = "0.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 dependencies = [
@@ -857,7 +834,7 @@ dependencies = [
  "futures 0.1.27 (registry+https://github.com/rust-lang/crates.io-index)",
  "libc 0.2.58 (registry+https://github.com/rust-lang/crates.io-index)",
  "serde 1.0.93 (registry+https://github.com/rust-lang/crates.io-index)",
- "state_machine_future 0.1.8 (registry+https://github.com/rust-lang/crates.io-index)",
+ "state_machine_future 0.2.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "tokio-codec 0.1.1 (registry+https://github.com/rust-lang/crates.io-index)",
  "tokio-core 0.1.17 (registry+https://github.com/rust-lang/crates.io-index)",
  "tokio-io 0.1.12 (registry+https://github.com/rust-lang/crates.io-index)",
@@ -1278,7 +1255,6 @@ dependencies = [
 "checksum darling 0.8.6 (registry+https://github.com/rust-lang/crates.io-index)" = "9158d690bc62a3a57c3e45b85e4d50de2008b39345592c64efd79345c7e24be0"
 "checksum darling_core 0.8.6 (registry+https://github.com/rust-lang/crates.io-index)" = "d2a368589465391e127e10c9e3a08efc8df66fd49b87dc8524c764bbe7f2ef82"
 "checksum darling_macro 0.8.6 (registry+https://github.com/rust-lang/crates.io-index)" = "244e8987bd4e174385240cde20a3657f607fb0797563c28255c353b5819a07b1"
-"checksum derive_state_machine_future 0.1.8 (registry+https://github.com/rust-lang/crates.io-index)" = "32c4adac64fe9b4807a7a51e126eadf3c2a10a3c3d1abe600454f0fa42dbe3e5"
 "checksum derive_state_machine_future 0.2.0 (registry+https://github.com/rust-lang/crates.io-index)" = "1220ad071cb8996454c20adf547a34ba3ac793759dab793d9dc04996a373ac83"
 "checksum dirs 2.0.1 (registry+https://github.com/rust-lang/crates.io-index)" = "1c4ef5a8b902d393339e2a2c7fe573af92ce7e0ee5a3ff827b4c9ad7e07e4fa1"
 "checksum dirs-sys 0.3.3 (registry+https://github.com/rust-lang/crates.io-index)" = "937756392ec77d1f2dd9dc3ac9d69867d109a2121479d72c364e42f4cab21e2d"
@@ -1346,7 +1322,6 @@ dependencies = [
 "checksum slab 0.4.2 (registry+https://github.com/rust-lang/crates.io-index)" = "c111b5bd5695e56cffe5129854aa230b39c93a305372fdbb2668ca2394eea9f8"
 "checksum smallvec 0.6.10 (registry+https://github.com/rust-lang/crates.io-index)" = "ab606a9c5e214920bb66c458cd7be8ef094f813f20fe77a54cc7dbfff220d4b7"
 "checksum stable_deref_trait 1.1.1 (registry+https://github.com/rust-lang/crates.io-index)" = "dba1a27d3efae4351c8051072d619e3ade2820635c3958d826bfea39d59b54c8"
-"checksum state_machine_future 0.1.8 (registry+https://github.com/rust-lang/crates.io-index)" = "4365457c6ec580f8dee3b2c951f69fb50e510906f6cf5739845f9aa3430eb918"
 "checksum state_machine_future 0.2.0 (registry+https://github.com/rust-lang/crates.io-index)" = "530e1d624baae485bce12e6647acb76aafa253346ee8a16751974eed5a24b13d"
 "checksum strsim 0.8.0 (registry+https://github.com/rust-lang/crates.io-index)" = "8ea5119cdb4c55b55d432abb513a0429384878c15dde60cc77b1c99de1a95a6a"
 "checksum structopt 0.2.16 (registry+https://github.com/rust-lang/crates.io-index)" = "fa19a5a708e22bb5be31c1b6108a2a902f909c4b9ba85cba44c06632386bc0ff"
