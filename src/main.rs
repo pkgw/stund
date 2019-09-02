@@ -90,7 +90,7 @@ pub struct StundOpenOptions {
     /// Do not try to read any user input when logging in
     no_input: bool,
 
-    #[structopt(raw(last = "true"), value_name = "after-command")]
+    #[structopt(last = true, value_name = "after-command")]
     /// If specified, exec this command after opening the tunnel
     after_command: Vec<String>,
     // TODO? keepalive option/config setting for tunnels that can/should be

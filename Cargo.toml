@@ -26,7 +26,7 @@ futures = "0.1"
 libc = "0.2"
 rand = "0.7"
 state_machine_future = "0.2"
-structopt = "0.2"
+structopt = "0.3"
 stund_protocol = { path = "protocol", version = "0.1.4" }
 tokio-borrow-stdio = { path = "tokio-borrow-stdio", version = "0.1.0" }
 tokio-codec = "0.1"
