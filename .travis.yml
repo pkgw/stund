@@ -1,9 +1,7 @@
-# Copyright 2018 the stund authors
+# Copyright 2018-2019 the stund authors
 # Licensed under the MIT License
 
 language: rust
-
-cache: cargo
 
 matrix:
   include:
