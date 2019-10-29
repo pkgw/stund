@@ -46,12 +46,12 @@ use std::mem;
 use std::os::unix::prelude::*;
 use std::os::unix::process::CommandExt as StdUnixCommandExt;
 use std::process::{self, ExitStatus};
-use std::sync::Mutex;
 use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::reactor::PollEvented2;
 use tokio_signal::unix::Signal;
 use tokio_signal::IoFuture;
 use shared_child::SharedChild;
+use futures_locks::Mutex;
 
 mod split;
 pub use split::{AsyncPtyMasterReadHalf, AsyncPtyMasterWriteHalf};
@@ -302,8 +302,10 @@ impl Child {
             //
             // As described in `spawn` above, we just indicate that we can
             // next make progress once a SIGCHLD is received.
-            if self.sigchld.lock().unwrap().poll()?.is_not_ready() {
-                return Ok(Async::NotReady);
+            if let Async::Ready(mut guard) = self.sigchld.lock().poll().unwrap() {
+                if guard.poll()?.is_not_ready() {
+                    return Ok(Async::NotReady);
+                }
             }
         }
     }
