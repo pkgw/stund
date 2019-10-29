@@ -46,6 +46,7 @@ use std::mem;
 use std::os::unix::prelude::*;
 use std::os::unix::process::CommandExt as StdUnixCommandExt;
 use std::process::{self, ExitStatus};
+use std::sync::Mutex;
 use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::reactor::PollEvented2;
 use tokio_signal::unix::Signal;
@@ -241,8 +242,7 @@ impl AsyncWrite for AsyncPtyMaster {
 pub struct Child {
     inner: SharedChild,
     kill_on_drop: bool,
-    reaped: bool,
-    sigchld: FlattenStream<IoFuture<Signal>>,
+    sigchld: Mutex<FlattenStream<IoFuture<Signal>>>,
 }
 
 impl fmt::Debug for Child {
@@ -251,7 +251,6 @@ impl fmt::Debug for Child {
             .field("pid", &self.inner.id())
             .field("inner", &self.inner)
             .field("kill_on_drop", &self.kill_on_drop)
-            .field("reaped", &self.reaped)
             .field("sigchld", &"..")
             .finish()
     }
@@ -260,10 +259,9 @@ impl fmt::Debug for Child {
 impl Child {
     fn new(inner: SharedChild) -> Child {
         Child {
-            inner: inner,
+            inner,
             kill_on_drop: true,
-            reaped: false,
-            sigchld: Signal::new(libc::SIGCHLD).flatten_stream(),
+            sigchld: Mutex::new(Signal::new(libc::SIGCHLD).flatten_stream()),
         }
     }
 
@@ -275,12 +273,8 @@ impl Child {
     /// Forces the child to exit.
     ///
     /// This is equivalent to sending a SIGKILL on unix platforms.
-    pub fn kill(&mut self) -> io::Result<()> {
-        if self.reaped {
-            Ok(())
-        } else {
-            self.inner.kill()
-        }
+    pub fn kill(&self) -> io::Result<()> {
+        self.inner.kill()
     }
 
     /// Drop this `Child` without killing the underlying process.
@@ -293,12 +287,12 @@ impl Child {
     }
 
     /// Check whether this `Child` has exited yet.
-    pub fn poll_exit(&mut self) -> Poll<ExitStatus, io::Error> {
-        assert!(!self.reaped);
+    ///
+    /// This is equivalent to `child.kill()` but does not require a mutable reference.
+    pub fn poll_exit(&self) -> Poll<ExitStatus, io::Error> {
 
         loop {
             if let Some(e) = self.try_wait()? {
-                self.reaped = true;
                 return Ok(e.into());
             }
 
@@ -308,34 +302,14 @@ impl Child {
             //
             // As described in `spawn` above, we just indicate that we can
             // next make progress once a SIGCHLD is received.
-            if self.sigchld.poll()?.is_not_ready() {
+            if self.sigchld.lock().unwrap().poll()?.is_not_ready() {
                 return Ok(Async::NotReady);
             }
         }
     }
 
     fn try_wait(&self) -> io::Result<Option<ExitStatus>> {
-        let id = self.id() as c_int;
-        let mut status = 0;
-
-        loop {
-            match unsafe { libc::waitpid(id, &mut status, libc::WNOHANG) } {
-                0 => return Ok(None),
-
-                n if n < 0 => {
-                    let err = io::Error::last_os_error();
-                    if err.kind() == io::ErrorKind::Interrupted {
-                        continue;
-                    }
-                    return Err(err);
-                }
-
-                n => {
-                    assert_eq!(n, id);
-                    return Ok(Some(ExitStatus::from_raw(status)));
-                }
-            }
-        }
+        self.inner.try_wait()
     }
 }
 
