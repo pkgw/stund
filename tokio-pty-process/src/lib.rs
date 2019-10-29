@@ -50,6 +50,7 @@ use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::reactor::PollEvented2;
 use tokio_signal::unix::Signal;
 use tokio_signal::IoFuture;
+use shared_child::SharedChild;
 
 mod split;
 pub use split::{AsyncPtyMasterReadHalf, AsyncPtyMasterWriteHalf};
@@ -238,7 +239,7 @@ impl AsyncWrite for AsyncPtyMaster {
 /// A child process that can be interacted with through a pseudo-TTY.
 #[must_use = "futures do nothing unless polled"]
 pub struct Child {
-    inner: process::Child,
+    inner: SharedChild,
     kill_on_drop: bool,
     reaped: bool,
     sigchld: FlattenStream<IoFuture<Signal>>,
@@ -257,7 +258,7 @@ impl fmt::Debug for Child {
 }
 
 impl Child {
-    fn new(inner: process::Child) -> Child {
+    fn new(inner: SharedChild) -> Child {
         Child {
             inner: inner,
             kill_on_drop: true,
@@ -634,7 +635,7 @@ impl CommandExtInternal for process::Command {
             Ok(())
         });
 
-        Ok(Child::new(self.spawn()?))
+        Ok(Child::new(SharedChild::spawn(self)?))
     }
 }
 

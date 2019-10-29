@@ -23,6 +23,7 @@ mio = "0.6"
 tokio = "0.1.22"
 tokio-io = "0.1.10"
 tokio-signal = "0.2.1"
+shared_child = "0.3.4"
 
 [dev-dependencies]
 errno = "0.2"
