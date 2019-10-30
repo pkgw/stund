@@ -34,10 +34,12 @@
 
 use futures::future::FlattenStream;
 use futures::{try_ready, Async, Future, Poll, Stream};
+use futures_locks::Mutex;
 use libc::{c_int, c_ushort};
 use mio::event::Evented;
 use mio::unix::{EventedFd, UnixReady};
 use mio::{PollOpt, Ready, Token};
+use shared_child::SharedChild;
 use std::ffi::{CStr, OsStr, OsString};
 use std::fmt;
 use std::fs::{File, OpenOptions};
@@ -50,8 +52,6 @@ use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::reactor::PollEvented2;
 use tokio_signal::unix::Signal;
 use tokio_signal::IoFuture;
-use shared_child::SharedChild;
-use futures_locks::Mutex;
 
 mod split;
 pub use split::{AsyncPtyMasterReadHalf, AsyncPtyMasterWriteHalf};
@@ -290,7 +290,6 @@ impl Child {
     ///
     /// This is equivalent to `child.kill()` but does not require a mutable reference.
     pub fn poll_exit(&self) -> Poll<ExitStatus, io::Error> {
-
         loop {
             if let Some(e) = self.try_wait()? {
                 return Ok(e.into());
