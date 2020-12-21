@@ -16,7 +16,7 @@ license = "MIT"
 edition = "2018"
 
 [dependencies]
-bytes = "0.4"
+bytes = "0.6"
 dirs = "3.0"
 failure = "0.1"
 futures = "0.1"
