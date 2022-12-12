@@ -19,7 +19,7 @@ edition = "2018"
 
 [dependencies]
 atty = "0.2"
-base64 = "0.13"
+base64 = "0.20"
 daemonize = "0.4"
 failure = "0.1"
 futures = "0.1"
