@@ -1,9 +1,9 @@
-// Copyright 2018 Peter Williams <peter@newton.cx>
+// Copyright 2018, 2023 Peter Williams <peter@newton.cx>
 // Licensed under the MIT License.
 
 //! The daemon itself.
 
-use base64;
+use base64::{self, Engine};
 use daemonize;
 use failure::{format_err, Error, ResultExt};
 use futures::sink::Send;
@@ -53,7 +53,7 @@ const FATAL_SIGNALS: &[i32] = &[
 pub struct State {
     sock_path: PathBuf,
     _opts: StundDaemonOptions,
-    log: Box<Write + StdSend>,
+    log: Box<dyn Write + StdSend>,
     children: HashMap<String, TunnelState>,
 }
 
@@ -87,7 +87,7 @@ impl State {
             libc::umask(0o177);
         }
 
-        let log: Box<Write + StdSend> = if opts.foreground {
+        let log: Box<dyn Write + StdSend> = if opts.foreground {
             println!("stund daemon: staying in foreground");
             Box::new(io::stdout())
         } else {
@@ -754,7 +754,10 @@ fn process_open_command(
     let mut rng = rand::thread_rng();
     let mut buf = [0u8; 32];
     rng.fill_bytes(&mut buf);
-    let key = format!("STUND:{}", base64::encode(&buf));
+    let key = format!(
+        "STUND:{}",
+        base64::engine::general_purpose::STANDARD.encode(&buf)
+    );
 
     // Let's launch the process.
 

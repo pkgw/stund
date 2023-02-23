@@ -1,4 +1,4 @@
-// Copyright 2018 Peter Williams, Tokio Contributors
+// Copyright 2018, 2023 Peter Williams, Tokio Contributors
 // Copyright 2019 Fabian Freyer
 // Licensed under both the MIT License and the Apache-2.0 license.
 
@@ -86,7 +86,7 @@ impl Read for AsyncPtyMasterReadHalf {
 impl AsyncRead for AsyncPtyMasterReadHalf {
     fn read_buf<B: BufMut>(&mut self, buf: &mut B) -> Poll<usize, io::Error> {
         let mut l = try_ready!(wrap_as_io(self.handle.poll_lock()));
-        l.read_buf(buf)
+        AsyncRead::read_buf(&mut *l, buf)
     }
 }
 

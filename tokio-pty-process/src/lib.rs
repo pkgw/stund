@@ -1,4 +1,4 @@
-// Copyright 2018-2019 Peter Williams <peter@newton.cx>
+// Copyright 2018-2019, 2023 Peter Williams <peter@newton.cx>
 // Licensed under both the MIT License and the Apache-2.0 license.
 
 #![deny(missing_docs)]
@@ -600,8 +600,8 @@ impl CommandExtInternal for process::Command {
         // XXX any need to close slave handles in the parent process beyond
         // what's done here?
 
-        self.before_exec(move || {
-            unsafe {
+        unsafe {
+            self.pre_exec(move || {
                 if raw {
                     let mut attrs: libc::termios = mem::zeroed();
 
@@ -629,10 +629,10 @@ impl CommandExtInternal for process::Command {
                 if libc::ioctl(0, libc::TIOCSCTTY.into(), 1) != 0 {
                     return Err(io::Error::last_os_error());
                 }
-            }
 
-            Ok(())
-        });
+                Ok(())
+            });
+        }
 
         Ok(Child::new(self.spawn()?))
     }
