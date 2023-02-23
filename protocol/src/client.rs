@@ -1,4 +1,4 @@
-// Copyright 2018 Peter Williams <peter@newton.cx>
+// Copyright 2018, 2023 Peter Williams <peter@newton.cx>
 // Licensed under the MIT License.
 
 //! Communication with the daemon.
@@ -27,8 +27,8 @@ use codecs::{self, Deserializer, Serializer};
 
 type Ser = Serializer<ClientMessage>;
 type De = Deserializer<ServerMessage>;
-type UserInputStream = Box<Stream<Item = Vec<u8>, Error = io::Error>>;
-type UserOutputSink = Box<Sink<SinkItem = Vec<u8>, SinkError = io::Error>>;
+type UserInputStream = Box<dyn Stream<Item = Vec<u8>, Error = io::Error>>;
+type UserOutputSink = Box<dyn Sink<SinkItem = Vec<u8>, SinkError = io::Error>>;
 
 /// A connection the stund daemon.
 pub struct Connection {
