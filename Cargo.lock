@@ -374,6 +374,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "hermit-abi"
+version = "0.3.9"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d231dfb89cfffdbc30e7fc41579ed6066ad03abda9e567ccafae602b97ec5024"
+
+[[package]]
 name = "ident_case"
 version = "1.0.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -406,9 +412,9 @@ checksum = "e2abad23fbc42b3700f2f279844dc832adb2b2eb069b2df918f455c4e18cc646"
 
 [[package]]
 name = "libc"
-version = "0.2.139"
+version = "0.2.155"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "201de327520df007757c1f0adce6e827fe8562fbc28bfd9c15571c66ca1f5f79"
+checksum = "97b3888a4aecf77e811145cadf6eef5901f4782c53886191b2f693f24761847c"
 
 [[package]]
 name = "lock_api"
@@ -487,6 +493,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "mio"
+version = "1.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4929e1f84c5e54c3ec6141cd5d8b5a5c055f031f80cf78f2072920173cb4d880"
+dependencies = [
+ "hermit-abi 0.3.9",
+ "libc",
+ "log 0.4.17",
+ "wasi",
+ "windows-sys 0.52.0",
+]
+
+[[package]]
 name = "mio-uds"
 version = "0.6.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -494,7 +513,7 @@ checksum = "afcb699eb26d4332647cc848492bbc15eafb26f08d0304550d5aa1f612e066f0"
 dependencies = [
  "iovec",
  "libc",
- "mio",
+ "mio 0.6.23",
 ]
 
 [[package]]
@@ -969,7 +988,7 @@ checksum = "5a09c0b5bb588872ab2f09afa13ee6e9dac11e10a0ec9e8e3ba39a5a5d530af6"
 dependencies = [
  "bytes",
  "futures",
- "mio",
+ "mio 0.6.23",
  "num_cpus",
  "tokio-codec",
  "tokio-current-thread",
@@ -1015,7 +1034,7 @@ dependencies = [
  "futures",
  "iovec",
  "log 0.4.17",
- "mio",
+ "mio 0.6.23",
  "scoped-tls",
  "tokio",
  "tokio-executor",
@@ -1074,7 +1093,7 @@ dependencies = [
  "errno",
  "futures",
  "libc",
- "mio",
+ "mio 1.0.0",
  "tokio",
  "tokio-io",
  "tokio-signal 0.2.9",
@@ -1090,7 +1109,7 @@ dependencies = [
  "futures",
  "lazy_static",
  "log 0.4.17",
- "mio",
+ "mio 0.6.23",
  "num_cpus",
  "parking_lot",
  "slab",
@@ -1130,7 +1149,7 @@ checksum = "e8f46863230f9a05cf52d173721ec391b9c5782a2465f593029922b8782b9ffe"
 dependencies = [
  "futures",
  "libc",
- "mio",
+ "mio 0.6.23",
  "mio-uds",
  "tokio-core",
  "tokio-io",
@@ -1145,7 +1164,7 @@ checksum = "d0c34c6e548f101053321cba3da7cbb87a610b85555884c41b07da2eb91aff12"
 dependencies = [
  "futures",
  "libc",
- "mio",
+ "mio 0.6.23",
  "mio-uds",
  "signal-hook-registry",
  "tokio-executor",
@@ -1173,7 +1192,7 @@ dependencies = [
  "bytes",
  "futures",
  "iovec",
- "mio",
+ "mio 0.6.23",
  "tokio-io",
  "tokio-reactor",
 ]
@@ -1216,7 +1235,7 @@ dependencies = [
  "bytes",
  "futures",
  "log 0.4.17",
- "mio",
+ "mio 0.6.23",
  "tokio-codec",
  "tokio-io",
  "tokio-reactor",
@@ -1233,7 +1252,7 @@ dependencies = [
  "iovec",
  "libc",
  "log 0.3.9",
- "mio",
+ "mio 0.6.23",
  "mio-uds",
  "tokio-core",
  "tokio-io",
@@ -1250,7 +1269,7 @@ dependencies = [
  "iovec",
  "libc",
  "log 0.4.17",
- "mio",
+ "mio 0.6.23",
  "mio-uds",
  "tokio-codec",
  "tokio-io",
