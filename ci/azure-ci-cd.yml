@@ -1,0 +1,36 @@
+# Main pipeline spec for CI/CD on Azure Pipelines.
+
+trigger:
+  branches:
+    include:
+    - master
+
+parameters:
+  - name: builds
+    type: object
+    default:
+    - name: linux_stable
+      vmImage: ubuntu-latest
+      vars:
+        TARGET: x86_64-unknown-linux-gnu
+        TOOLCHAIN: stable
+
+    - name: macos
+      vmImage: macos-latest
+      vars:
+        TARGET: x86_64-apple-darwin
+        TOOLCHAIN: stable
+
+stages:
+- stage: BuildAndTest
+  jobs:
+  - ${{ each build in parameters.builds }}:
+    - job: ${{ format('build_{0}', build.name) }}
+      pool:
+        vmImage: ${{ build.vmImage }}
+      steps:
+      - template: azure-build-and-test.yml
+        parameters:
+          ${{ insert }}: ${{ build.params }}
+      variables:
+        ${{ insert }}: ${{ build.vars }}
