@@ -30,7 +30,5 @@ stages:
         vmImage: ${{ build.vmImage }}
       steps:
       - template: azure-build-and-test.yml
-        parameters:
-          ${{ insert }}: ${{ build.params }}
       variables:
         ${{ insert }}: ${{ build.vars }}
