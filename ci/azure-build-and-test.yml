@@ -1,0 +1,20 @@
+steps:
+- checkout: self
+
+- bash: |
+    set -ex
+    rustup set profile minimal
+    rustup component remove --toolchain=$TOOLCHAIN rust-docs || echo "already removed"
+    rustup update --no-self-update $TOOLCHAIN
+    rustup default $TOOLCHAIN
+    # Helpful versions
+    rustup -V
+    rustc -Vv
+    cargo -V
+  displayName: Setup Rust
+
+- bash: cargo build --all --release
+  displayName: "cargo build"
+
+- bash: cargo test --all --release
+  displayName: "cargo test"
