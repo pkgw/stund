@@ -503,6 +503,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "mio"
+version = "1.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a69bcab0ad47271a0234d9422b131806bf3968021e5dc9328caf2d4cd58557fc"
+dependencies = [
+ "libc",
+ "log 0.4.29",
+ "wasi",
+ "windows-sys",
+]
+
+[[package]]
 name = "mio-uds"
 version = "0.6.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -510,7 +522,7 @@ checksum = "afcb699eb26d4332647cc848492bbc15eafb26f08d0304550d5aa1f612e066f0"
 dependencies = [
  "iovec",
  "libc",
- "mio",
+ "mio 0.6.23",
 ]
 
 [[package]]
@@ -992,7 +1004,7 @@ checksum = "5a09c0b5bb588872ab2f09afa13ee6e9dac11e10a0ec9e8e3ba39a5a5d530af6"
 dependencies = [
  "bytes",
  "futures",
- "mio",
+ "mio 0.6.23",
  "num_cpus",
  "tokio-codec",
  "tokio-current-thread",
@@ -1038,7 +1050,7 @@ dependencies = [
  "futures",
  "iovec",
  "log 0.4.29",
- "mio",
+ "mio 0.6.23",
  "scoped-tls",
  "tokio",
  "tokio-executor",
@@ -1097,7 +1109,7 @@ dependencies = [
  "errno",
  "futures",
  "libc",
- "mio",
+ "mio 1.1.1",
  "tokio",
  "tokio-io",
  "tokio-signal 0.2.9",
@@ -1113,7 +1125,7 @@ dependencies = [
  "futures",
  "lazy_static",
  "log 0.4.29",
- "mio",
+ "mio 0.6.23",
  "num_cpus",
  "parking_lot",
  "slab",
@@ -1153,7 +1165,7 @@ checksum = "e8f46863230f9a05cf52d173721ec391b9c5782a2465f593029922b8782b9ffe"
 dependencies = [
  "futures",
  "libc",
- "mio",
+ "mio 0.6.23",
  "mio-uds",
  "tokio-core",
  "tokio-io",
@@ -1168,7 +1180,7 @@ checksum = "d0c34c6e548f101053321cba3da7cbb87a610b85555884c41b07da2eb91aff12"
 dependencies = [
  "futures",
  "libc",
- "mio",
+ "mio 0.6.23",
  "mio-uds",
  "signal-hook-registry",
  "tokio-executor",
@@ -1196,7 +1208,7 @@ dependencies = [
  "bytes",
  "futures",
  "iovec",
- "mio",
+ "mio 0.6.23",
  "tokio-io",
  "tokio-reactor",
 ]
@@ -1239,7 +1251,7 @@ dependencies = [
  "bytes",
  "futures",
  "log 0.4.29",
- "mio",
+ "mio 0.6.23",
  "tokio-codec",
  "tokio-io",
  "tokio-reactor",
@@ -1256,7 +1268,7 @@ dependencies = [
  "iovec",
  "libc",
  "log 0.3.9",
- "mio",
+ "mio 0.6.23",
  "mio-uds",
  "tokio-core",
  "tokio-io",
@@ -1273,7 +1285,7 @@ dependencies = [
  "iovec",
  "libc",
  "log 0.4.29",
- "mio",
+ "mio 0.6.23",
  "mio-uds",
  "tokio-codec",
  "tokio-io",
