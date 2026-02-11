@@ -13,7 +13,7 @@ readme = "README.md"
 keywords = ["stund"]
 categories = ["asynchronous"]
 license = "MIT"
-edition = "2018"
+edition = "2021"
 
 [workspace]
 
