@@ -431,7 +431,7 @@ struct ClientCommonState {
 }
 
 impl ClientCommonState {
-    pub fn shared(&self) -> ::std::sync::MutexGuard<State> {
+    pub fn shared(&self) -> ::std::sync::MutexGuard<'_, State> {
         self.shared.lock().unwrap()
     }
 }
@@ -751,7 +751,7 @@ fn process_open_command(
     // Generate a magic bit of text that we'll use to recognize when the
     // login has succeeded.
 
-    let mut rng = rand::thread_rng();
+    let mut rng = rand::rng();
     let mut buf = [0u8; 32];
     rng.fill_bytes(&mut buf);
     let key = format!(
