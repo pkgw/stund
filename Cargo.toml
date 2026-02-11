@@ -13,7 +13,7 @@ readme = "README.md"
 keywords = ["stund"]
 categories = ["asynchronous"]
 license = "MIT"
-edition = "2018"
+edition = "2021"
 
 [workspace]
 
@@ -24,7 +24,7 @@ daemonize = "0.5"
 failure = "0.1"
 futures = "0.1"
 libc = "0.2"
-rand = "0.9,<0.10"
+rand = "0.10"
 state_machine_future = "0.2"
 structopt = "0.3"
 stund_protocol = { path = "protocol", version = "0.1.4" }

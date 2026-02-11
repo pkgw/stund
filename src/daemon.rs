@@ -11,7 +11,7 @@ use futures::stream::{SplitSink, SplitStream, StreamFuture};
 use futures::sync::{mpsc, oneshot};
 use futures::{try_ready, Async, AsyncSink, Future, Poll, Sink, Stream};
 use libc;
-use rand::{self, RngCore};
+use rand::Rng;
 use state_machine_future::{transition, RentToOwn, StateMachineFuture};
 use std::collections::HashMap;
 use std::fmt;
